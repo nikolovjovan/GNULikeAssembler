@@ -4,17 +4,21 @@
 
 #include "asm.h"
 
-using namespace std;
+using std::cerr;
+using std::cout;
+using std::ifstream;
+using std::ofstream;
+using std::string;
 
-void show_usage(const string& program_name)
+void show_usage(const string &program_name)
 {
-    cout << "Usage: " << program_name << " [options] file..." << endl; // [-e] [-o <output_file>] <input_file>" << endl;
-    cout << "Options:" << endl;
-    cout << "  -e\t\tOutput in binary format for use in the provided emulator." << endl;
-    cout << "  -o <file>\tPlace the output into <file>." << endl;
+    cout << "Usage: " << program_name << " [options] file...\n"; // [-e] [-o <output_file>] <input_file>\n";
+    cout << "Options:\n";
+    cout << "  -e\t\tOutput in binary format for use in the provided emulator.\n";
+    cout << "  -o <file>\tPlace the output into <file>.\n";
 }
 
-bool file_exists(const string& name)
+bool file_exists(const string &name)
 {
     if (FILE *file = fopen(name.c_str(), "r"))
     {
@@ -24,7 +28,7 @@ bool file_exists(const string& name)
     return false;
 }
 
-string get_output_file(const string& input_file)
+string get_output_file(const string &input_file)
 {
     size_t lastslash = 0, lastdot = 0;
     for (size_t i = 0; i < input_file.length(); ++i)
@@ -39,12 +43,11 @@ string get_output_file(const string& input_file)
     return input_file.substr(0, lastdot) + ".o";
 }
 
-
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
     if (argc < 2) // zero arguments
     {
-        cerr << "ERROR: No input file!" << endl;
+        cerr << "ERROR: No input file!\n";
         show_usage(argv[0]);
         return 1;
     }
@@ -60,34 +63,41 @@ int main(int argc, char* argv[])
         {
             if (i == argc - 1) // -o flag is the last argument
             {
-                cerr << "ERROR: Invalid output file switch position!" << endl;
+                cerr << "ERROR: Invalid output file switch position!\n";
                 show_usage(argv[0]);
                 return 1;
             }
             output_file = argv[++i]; // set output file
         }
-        else input_file = argv[i]; // set input file
+        else if (input_file.empty())
+            input_file = argv[i]; // set input file
+        else
+        {
+            cerr << "ERROR: Invalid number of input files!\n";
+            show_usage(argv[0]);
+            return 1;
+        }
     }
 
-    if (!ifstream(input_file)) // invalid input file
+    if (!std::ifstream(input_file)) // invalid input file
     {
-        cerr << "ERROR: Input file: " << input_file << " does not exist!" << endl;
+        cerr << "ERROR: Input file: " << input_file << " does not exist or cannot be opened for reading!\n";
         return 2;
     }
     if (output_file.empty()) // try getting output file name from input file
         output_file = get_output_file(input_file);
-    if (!ofstream(output_file)) // invalid output file
+    if (!std::ofstream(output_file)) // invalid output file
     {
-        cerr << "ERROR: Failed to open: " << output_file << " for writing!" << endl;
+        cerr << "ERROR: Output file: " << output_file << " cannot be opened for writing!\n";
         return 3;
     }
 
     Assembler assembler(input_file, output_file, eflag);
     if (!assembler.assemble())
     {
-        cerr << "ERROR: Failed to assemble: " << input_file << "!" << endl;
+        cerr << "ERROR: Failed to assemble: " << input_file << "!\n";
         return 0;
     }
-    cout << "Successfully assembled: " << input_file << "!" << endl;
+    cout << "Successfully assembled: " << input_file << "!\n";
     return 0;
 }

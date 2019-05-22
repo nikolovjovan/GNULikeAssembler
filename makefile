@@ -10,7 +10,7 @@ HPATH		:= $(PROJECTDIR)/$(HDIR)
 OUTPUTPATH	:= $(PROJECTDIR)/$(OUTPUTDIR)
 
 CC			:= g++
-CCFLAGS		:= -m32
+CCFLAGS		:= -m32 -std=c++11
 
 SRC			:= $(wildcard $(SRCPATH)/*.cpp)
 H			:= $(wildcard $(HPATH)/*h)
