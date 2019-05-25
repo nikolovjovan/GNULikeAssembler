@@ -1,7 +1,6 @@
 #include "asm.h"
 
 #include <iostream>
-#include <cctype>
 
 using std::cerr;
 using std::cout;
@@ -10,6 +9,15 @@ using std::regex;
 using std::smatch;
 using std::string;
 
+inline string lowercase(const string &s)
+{
+    string res = s;
+    for (unsigned j = 0; j < res.length(); ++j)
+        if (res[j] >= 'A' && res[j] <= 'Z')
+            res[j] = (char) (res[j] - 'A' + 'a');
+    return res;
+}
+
 Assembler::Assembler(const string &input_file, const string &output_file, bool binary)
 {
     this->input_file = input_file;
@@ -17,9 +25,7 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
     this->binary = binary;
 
     for (unsigned i = 0; i < REGEX_CNT; ++i)
-    {
-        regex_exprs[i].assign(regex_strings[i], regex::icase | regex::optimize); //, std::regex::extended); // = std::regex{regex_strings[i], std::regex::extended};
-    }
+        regex_exprs[i].assign(regex_strings[i], regex::icase | regex::optimize);
 }
 
 Assembler::~Assembler()
@@ -47,6 +53,8 @@ bool Assembler::assemble()
         cerr << "ERROR: Assembler failed to complete second pass!\n";
         return false;
     }
+
+    // print to file
 
     return true;
 }
@@ -91,22 +99,9 @@ parse_t Assembler::parse(const string &s)
     for (unsigned i = 0; i < REGEX_CNT; ++i)
         if (regex_match(s, match, regex_exprs[i]))
         {
-            // printing matches
-            // cout << "match: ";
-            // for (unsigned i = 1; i < match.size(); ++i)
-            // {
-            //     cout << '\"' << match.str(i) << '\"';
-            //     cout << (i < match.size() - 1 ? '|' : ' ');
-            //     // for (int j = i + 1; j < match.size(); ++j)
-            //     //     if (!match.str(j).empty())
-            //     //     {
-            //     //         cout << "|";
-            //     //         break;
-            //     //     }
-            // }
-            // cout << '\n';
+            unsigned first = 1;
+            while (first < match.size() && match.str(first).empty()) first++;
 
-            // parsing matches
             switch (i)
             {
             case EMPTY:
@@ -116,8 +111,8 @@ parse_t Assembler::parse(const string &s)
             }
             case LABEL:
             {
-                string label = match.str(1);
-                string other = match.str(2);
+                string label = match.str(first);
+                string other = match.str(first + 1);
 
                 cout << "Parsed: LABEL = " << label << " OTHER: " << other << '\n';
 
@@ -132,14 +127,43 @@ parse_t Assembler::parse(const string &s)
             }
             case DIRECTIVE:
             {
-                return parse_directive(match);
+                return parse_directive(match, first);
             }
+            case ZEROADDR:
+            {
+                return parse_zeroaddr(match, first);
+            }
+            case ONEADDR:
+            {
+                return parse_oneaddr(match, first);
+            }
+            case TWOADDR:
+            {
+                return parse_twoaddr(match, first);
+            }
+            // default:
+            // {
+            //     // printing matches
+            //     cout << "match: ";
+            //     for (unsigned i = 1; i < match.size(); ++i)
+            //     {
+            //         cout << '\"' << match.str(i) << '\"';
+            //         cout << (i < match.size() - 1 ? '|' : ' ');
+            //         // for (int j = i + 1; j < match.size(); ++j)
+            //         //     if (!match.str(j).empty())
+            //         //     {
+            //         //         cout << "|";
+            //         //         break;
+            //         //     }
+            //     }
+            //     cout << '\n';
+            // }
             }
         }
     return ERROR;
 }
 
-parse_t Assembler::parse_directive(const std::smatch &match)
+parse_t Assembler::parse_directive(const std::smatch &match, unsigned first)
 {
     parse_t res = SUCCESS;
     string dir = "";
@@ -148,10 +172,7 @@ parse_t Assembler::parse_directive(const std::smatch &match)
         if (match.str(i).empty())
             continue;
 
-        dir.assign(match.str(i).c_str());
-        for (unsigned j = 0; j < dir.length(); ++j)
-            if (dir[j] >= 'A' && dir[j] <= 'Z')
-                dir[j] = (char) (dir[j] - 'A' + 'a');
+        dir = lowercase(match.str(i));
 
         cout << "Parsed: DIRECTIVE = " << dir;
 
@@ -186,6 +207,166 @@ parse_t Assembler::parse_directive(const std::smatch &match)
             res = ERROR; // invalid directive (should never happen)
 
         cout << '\n';
+
+        return res;
+    }
+    return ERROR;
+}
+
+parse_t Assembler::parse_zeroaddr(const std::smatch &match, unsigned first)
+{
+    parse_t res = SUCCESS;
+    string opMnem = "";
+    for (unsigned i = 1; i < match.size(); ++i)
+    {
+        if (match.str(i).empty())
+            continue;
+
+        opMnem = lowercase(match.str(i));
+
+        cout << "Parsed: MNEMOMIC = " << opMnem << ' ';
+
+        if (!opMnem.compare("nop"))
+        {
+            cout << "no operation";
+        }
+        else if (!opMnem.compare("halt"))
+        {
+            cout << "halt";
+        }
+        else if (!opMnem.compare("ret"))
+        {
+            cout << "return from subroutine";
+        }
+        else if (!opMnem.compare("iret"))
+        {
+            cout << "return from interrupt routine";
+        }
+        else
+            res = ERROR; // invalid directive (should never happen)
+
+        cout << '\n';
+
+        return res;
+    }
+    return ERROR;
+}
+
+parse_t Assembler::parse_oneaddr(const std::smatch &match, unsigned first)
+{
+    parse_t res = SUCCESS;
+    string opMnem = "";
+    for (unsigned i = 1; i < match.size(); ++i)
+    {
+        if (match.str(i).empty())
+            continue;
+
+        opMnem = lowercase(match.str(i));
+
+        cout << "Parsed: MNEMOMIC = " << opMnem << ' ';
+
+        if (!opMnem.compare("int"))
+        {
+            cout << "software interrupt, ENTRY = ";
+        }
+        else if (!opMnem.compare("not"))
+        {
+            cout << "negation, OPERAND = ";
+        }
+        else if (!opMnem.compare("jmp") || !opMnem.compare("jeq") ||
+                 !opMnem.compare("jne") || !opMnem.compare("jgt"))
+        {
+            cout << "jump, TO = ";
+        }
+        else if (!opMnem.compare("call"))
+        {
+            cout << "function call, FUNCTION = ";
+        }
+        else if (!opMnem.compare("push") || !opMnem.compare("pop"))
+        {
+            cout << "stack manipulation, OPERAND = ";
+        }
+        else
+            res = ERROR; // invalid directive (should never happen)
+
+        cout << match.str(i + 1) << '\n';
+
+        return res;
+    }
+    return ERROR;
+}
+
+parse_t Assembler::parse_twoaddr(const std::smatch &match, unsigned first)
+{
+    parse_t res = SUCCESS;
+    string opMnem = "", opWidth;
+    for (unsigned i = 1; i < match.size(); ++i)
+    {
+        if (match.str(i).empty())
+            continue;
+
+        opMnem = lowercase(match.str(i));
+        opWidth = lowercase(match.str(i + 1));
+
+        if (!opWidth.compare(""))
+            opWidth = "w";
+
+        cout << "Parsed: MNEMOMIC = " << opMnem << opWidth << ' ';
+
+        // char width = opMnem[opMnem.length() - 1] == 'b' ? 'b' : 'w';
+
+        // if (opMnem[opMnem.length() - 1] == 'b' ||
+        //     opMnem[opMnem.length() - 1] == 'w')
+        //     opMnem = opMnem.substr(0, opMnem.length() - 1);
+
+        if (!opMnem.compare("xchg"))
+        {
+            cout << "operand exchange";
+        }
+        else if (!opMnem.compare("mov"))
+        {
+            cout << "moving from SRC to DST";
+        }
+        else if (!opMnem.compare("add"))
+        {
+            cout << "DST = DST + SRC";
+        }
+        else if (!opMnem.compare("sub"))
+        {
+            cout << "DST = DST - SRC";
+        }
+        else if (!opMnem.compare("mul"))
+        {
+            cout << "DST = DST * SRC";
+        }
+        else if (!opMnem.compare("div"))
+        {
+            cout << "DST = DST / SRC";
+        }
+        else if (!opMnem.compare("cmp"))
+        {
+            cout << "temp = DST - SRC";
+        }
+        else if (!opMnem.compare("and"))
+        {
+            cout << "DST = DST & SRC";
+        }
+        else if (!opMnem.compare("or"))
+        {
+            cout << "DST = DST | SRC";
+        }
+        else if (!opMnem.compare("xor"))
+        {
+            cout << "DST = DST ^ SRC";
+        }
+        else if (!opMnem.compare("test"))
+        {
+            cout << "temp = DST & SRC";
+        }
+        else
+            res = ERROR; // invalid directive (should never happen)
+
+        cout << " DST = " << match.str(i + 2) << " SRC = " << match.str(i + 3) << '\n';
 
         return res;
     }
