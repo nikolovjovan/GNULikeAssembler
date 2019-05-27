@@ -28,8 +28,8 @@ test3: mov	r0, &num
 #	t$test:				 #invalid label contains $
 	test_:   
 
-.section 		 testsection	 , 	"bw6" # flags, see asm.h
-# .section 		 testsection2	 , 	"brrw6" # double r should error
+.section 		 testsection	 , 	"bw" # flags, see asm.h
+# .section 		 testsection2	 , 	"brrwd" # double r should error
 
 .end
 

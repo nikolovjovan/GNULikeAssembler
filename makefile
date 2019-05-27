@@ -15,14 +15,21 @@ CCFLAGS		:= -m32 -std=c++11
 SRC			:= $(wildcard $(SRCPATH)/*.cpp)
 H			:= $(wildcard $(HPATH)/*h)
 TARGET		:= $(OUTPUTPATH)/$(TARGETNAME)
+TARGETDEBUG	:= $(OUTPUTPATH)/$(TARGETNAME)_debug
 
 $(TARGET): $(SRC) $(H)
 	@mkdir -p $(OUTPUTPATH)
 	@$(CC) $(CCFLAGS) -o $(TARGET) -I$(HPATH) $(SRC)
 
+$(TARGETDEBUG): $(SRC) $(H)
+	@mkdir -p $(OUTPUTPATH)
+	@$(CC) $(CCFLAGS) -g -o $(TARGETDEBUG) -I$(HPATH) $(SRC)
+
 all: $(TARGET)
+
+debug: $(TARGETDEBUG)
 
 clean:
 	@rm -rf $(OUTPUTPATH)
 
-.PHONY: clean
+.PHONY: all, debug, clean
