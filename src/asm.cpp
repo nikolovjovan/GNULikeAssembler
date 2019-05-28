@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <list>
 
 using std::cerr;
 using std::cout;
@@ -9,19 +10,30 @@ using std::ifstream;
 using std::map;
 using std::regex;
 using std::smatch;
+using std::sregex_token_iterator;
 using std::string;
 using std::stoul;
+using std::list;
 
 Elf16_Addr Symtab_Entry::symtab_index   = 0;
 Elf16_Addr Shdrtab_Entry::shdrtab_index = 0;
 
-inline string lowercase(const string &s)
+inline string lowercase(const string &str)
 {
-    string res = s;
+    string res = str;
     for (unsigned j = 0; j < res.length(); ++j)
         if (res[j] >= 'A' && res[j] <= 'Z')
             res[j] = (char)(res[j] - 'A' + 'a');
     return res;
+}
+
+inline list<string> tokenize(const string &str, const regex &regex)
+{
+    list<string> tokens;
+    sregex_token_iterator it(str.begin(), str.end(), regex, -1), reg_end;
+    for (; it != reg_end; ++it)
+        tokens.emplace_back(it->str());
+    return tokens;
 }
 
 Assembler::Assembler(const string &input_file, const string &output_file, bool binary)
@@ -51,6 +63,12 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
     shstrtab_vect.push_back("");
 
     // Initializing regex
+    regex_split.assign(regex_split_string, regex::icase | regex::optimize);
+    regex_symbol.assign(regex_symbol_string, regex::icase | regex::optimize);
+    regex_byte.assign(regex_byte_string, regex::icase | regex::optimize);
+    regex_word.assign(regex_word_string, regex::icase | regex::optimize);
+    regex_op1b.assign(regex_op1b_string, regex::icase | regex::optimize);
+    regex_op2b.assign(regex_op2b_string, regex::icase | regex::optimize);
     for (unsigned i = 0; i < REGEX_CNT; ++i)
         regex_exprs[i].assign(regex_strings[i], regex::icase | regex::optimize);
 
@@ -254,7 +272,7 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
                 else if (name == ".text") add_shdr(name, SHT_PROGBITS, SHF_EXECINSTR);
                 else
                 {
-                    cerr << "ERROR: Cannot infer section type and flags from section name: " << name << '\n';
+                    cerr << "ERROR: Cannot infer section type and flags from section name: \"" << name << "\"\n";
                     return Parse_Result::Error;
                 }
             }
@@ -267,18 +285,19 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
                     else if (c == 'r') read = true;
                     else if (c == 'w') write = true;
                     else if (c == 'x') execute = true;
-                    // else if (c >= '0' && c <= '9') cur_sect.alignment = 1 << (c - '0');
                 if (nobits && write && !execute) add_shdr(name, SHT_NOBITS, SHF_WRITE);
                 else if (!nobits && write && !execute) add_shdr(name, SHT_PROGBITS, SHF_ALLOC);
                 else if (!nobits && !write && execute) add_shdr(name, SHT_PROGBITS, SHF_EXECINSTR);
                 else
                 {
-                    cerr << "ERROR: Invalid section flags combination: " << flags << '\n';
+                    cerr << "ERROR: Invalid section flags combination: \"" << flags << "\"\n";
                     return Parse_Result::Error;
                 }
             }
         }
 
+        cur_sect.type = shdrtab_map.at(cur_sect.name).shdr.sh_type;
+        cur_sect.flags = shdrtab_map.at(cur_sect.name).shdr.sh_flags;
         cur_sect.shdrtab_index = shdrtab_map.at(cur_sect.name).index;
 
         cout << " SECTION NAME: " << name << " SECTION FLAGS: " << flags;
@@ -299,17 +318,76 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         break;
     }
     case Directive::Byte:
+    {
+        if (cur_sect.flags & SHF_EXECINSTR)
+        {
+            cerr << "ERROR: Data in .text section!\n";
+            return Parse_Result::Error;
+        }
+        Elf16_Half byte;
+        for (string token : tokenize(match.str(index++), regex_split))
+            if (decode_byte(token, byte))
+            {
+                cout << "Decoded byte: " << (unsigned) byte << '\n';
+                if (cur_sect.type == SHT_NOBITS && byte != 0)
+                {
+                    cerr << "ERROR: Data cannot be initialized in .bss section!\n";
+                    return Parse_Result::Error;
+                }
+                cur_sect.loc_cnt += sizeof(Elf16_Half);
+            }
+            else return Parse_Result::Error;
+        break;
+    }
     case Directive::Word:
     {
-        cout << " SYMBOLS: " << match.str(index++);
+        if (cur_sect.flags & SHF_EXECINSTR)
+        {
+            cerr << "ERROR: Data in .text section!" << cur_sect.name << "\n";
+            return Parse_Result::Error;
+        }
+        Elf16_Word word;
+        for (string token : tokenize(match.str(index++), regex_split))
+            if (decode_word(token, word))
+            {
+                cout << "Decoded word: " << (unsigned) word << '\n';
+                if (cur_sect.type == SHT_NOBITS && word != 0)
+                {
+                    cerr << "ERROR: Data cannot be initialized in .bss section!\n";
+                    return Parse_Result::Error;
+                }
+                cur_sect.loc_cnt += sizeof(Elf16_Word);
+            }
+            else return Parse_Result::Error;
         break;
     }
     case Directive::Equ:
     case Directive::Set:
     {
-        cout << " SYMBOL: " << match.str(index++) << " EXPR: " << match.str(index++);
-        // calculate expression
-        // add symbol
+        // temporary, need to implement expression parsing
+        string symbol = match.str(index++), expr = match.str(index++);
+        Elf16_Word word;
+        if (!decode_word(expr, word)) return Parse_Result::Error;
+        if (symtab_map.count(symbol) > 0)
+        {
+            if (directive_map[dir] == Directive::Equ)
+            {
+                cerr << "ERROR: Symbol \"" << symbol << "\" already in use!\n";
+                return Parse_Result::Error;
+            }
+            else
+            {
+                symtab_map.at(symbol).sym.st_value = word;
+            }
+        }
+        else
+        {
+            strtab_vect.push_back(symbol);
+            Symtab_Entry entry(strtab_vect.size() - 1, word, ELF16_ST_INFO(STB_LOCAL, STT_OBJECT), cur_sect.shdrtab_index, cur_sect.name);
+            symtab_map.insert(Symtab_Pair(symbol, entry));
+            symtab_vect.push_back(entry);
+        }
+        cout << " SYMBOL: " << symbol << " EXPR: " << expr;
         break;
     }
     case Directive::Align:
@@ -335,7 +413,7 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         if (remainder && pass == Pass::First)
             cur_sect.loc_cnt += alignment - remainder;
 
-        cout << " BYTES: " << alignment << " FILL: " << fill << " MAX: " << max;
+        cout << " BYTES: " << (unsigned) alignment << " FILL: " << (unsigned) fill << " MAX: " << (unsigned) max;
         break;
     }
     case Directive::Skip:
@@ -349,7 +427,7 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         if (pass == Pass::First)
             cur_sect.loc_cnt += bytes;
 
-        cout << " BYTES: " << bytes << " FILL: " << fill;
+        cout << " BYTES: " << (unsigned) bytes << " FILL: " << (unsigned) fill;
         break;
     }
     default:
@@ -373,6 +451,8 @@ Parse_Result Assembler::parse_zeroaddr(const smatch &match, unsigned index)
     string opMnem = lowercase(match.str(index++));
 
     cout << "Parsed: MNEMOMIC = " << opMnem << ' ';
+
+    cur_sect.loc_cnt += sizeof(Elf16_Half);
 
     switch (zero_addr_instr_map[opMnem])
     {
@@ -415,9 +495,12 @@ Parse_Result Assembler::parse_oneaddr(const smatch &match, unsigned index)
 
     Parse_Result res = Parse_Result::Success;
     string opMnem = lowercase(match.str(index++));
-    string operand = match.str(index);
+    string operand = lowercase(match.str(index));
 
     cout << "Parsed: MNEMOMIC = " << opMnem << ' ';
+
+    cur_sect.loc_cnt += sizeof(Elf16_Half);
+    cur_sect.loc_cnt += get_operand_size(operand);
 
     switch (one_addr_instr_map[opMnem])
     {
@@ -479,12 +562,18 @@ Parse_Result Assembler::parse_twoaddr(const smatch &match, unsigned index)
 
     Parse_Result res = Parse_Result::Success;
     string opMnem = lowercase(match.str(index++)),
-           opWidth = lowercase(match.str(index++));
+           opWidth = lowercase(match.str(index++)),
+           op1 = match.str(index++),
+           op2 = match.str(index++);
 
     if (opWidth == "")
         opWidth = "w";
 
     cout << "Parsed: MNEMOMIC = " << opMnem << opWidth << ' ';
+
+    cur_sect.loc_cnt += sizeof(Elf16_Half);
+    cur_sect.loc_cnt += get_operand_size(op1);
+    cur_sect.loc_cnt += get_operand_size(op2);
 
     switch (two_addr_instr_map[opMnem])
     {
@@ -550,18 +639,22 @@ Parse_Result Assembler::parse_twoaddr(const smatch &match, unsigned index)
     }
     }
 
-    cout << " DST = " << match.str(index++) << " SRC = " << match.str(index++) << '\n';
+    cout << " DST = " << op1 << " SRC = " << op2 << '\n';
 
     return res;
 }
 
-bool Assembler::decode_word(const string &value, Elf16_Word &result)
+bool Assembler::decode_word(const string &str, Elf16_Word &word)
 {
-    if (value == "")
+    word = 0;
+    if (str == "") return true;
+    smatch match;
+    if (!regex_match(str, match, regex_word))
     {
-        result = 0;
-        return true;
+        cerr << "ERROR: Failed to decode: \"" << str << "\" as a word value!\n";
+        return false;
     }
+    string value = match.str(1);
     bool inv = value[0] == '~', neg = value[0] == '-';
     int first = inv || neg;
     unsigned long temp;
@@ -571,24 +664,41 @@ bool Assembler::decode_word(const string &value, Elf16_Word &result)
     else temp = stoul(value.substr(first + 2), 0, 16);
     if (temp >= 0 && temp <= 0xffff)
     {
-        result = temp;
-        if (inv) result = ~result;
-        else if (neg) result = -result;
+        word = temp;
+        if (inv) word = ~word;
+        else if (neg) word = -word;
         return true;
     }
-    cerr << "ERROR: Failed to decode: " << value << " as a word value!\n";
+    cerr << "ERROR: Value: \"" << value << "\" is larger than a word value!\n";
     return false;
 }
 
-bool Assembler::decode_byte(const string &value, Elf16_Half &result)
+bool Assembler::decode_byte(const string &str, Elf16_Half &byte)
 {
-    Elf16_Word temp;
-    if (decode_word(value, temp) && temp >= 0 && temp <= 0xff)
+    byte = 0;
+    if (str == "") return true;
+    smatch match;
+    if (!regex_match(str, match, regex_byte))
     {
-        result = temp;
+        cerr << "ERROR: Failed to decode: \"" << str << "\" as a byte value!\n";
+        return false;
+    }
+    string value = match.str(1);
+    bool inv = value[0] == '~', neg = value[0] == '-';
+    int first = inv || neg;
+    unsigned long long temp;
+    if (value[first] != '0') temp = stoul(value.substr(first), 0, 10);
+    else if (value[first + 1] == 'b') temp = stoul(value.substr(first + 2), 0, 2);
+    else if (value[first + 1] != 'x') temp = stoul(value.substr(first + 1), 0, 8);
+    else temp = stoul(value.substr(first + 2), 0, 16);
+    if (temp >= 0 && temp <= 0xff)
+    {
+        byte = temp;
+        if (inv) byte = ~byte;
+        else if (neg) byte = -byte;
         return true;
     }
-    cerr << "ERROR: Failed to decode: " << value << " as a byte value!\n";
+    cerr << "ERROR: Value: \"" << value << "\" is larger than a byte value!\n";
     return false;
 }
 
@@ -633,9 +743,18 @@ bool Assembler::add_shdr(const string &name, Elf16_Word type, Elf16_Word flags)
     shdrtab_map.insert(Shdrtab_Pair(name, entry));
     shstrtab_vect.push_back(name);
 
-    cur_sect.type = type;
-    cur_sect.flags = flags;
-    cur_sect.shdrtab_index = entry.shdrtab_index;
-
     return true;
+}
+
+unsigned Assembler::get_operand_size(const string &operand)
+{
+    smatch match;
+    if (regex_match(operand, match, regex_op1b)) return 1;
+    if (!regex_match(operand, match, regex_op2b)) return 3;
+    unsigned index = 1;
+    while (index < match.size() && match.str(index).empty())
+        index++;
+    Elf16_Half offset;
+    if (decode_byte(match.str(index), offset)) return 2;
+    return 3;
 }

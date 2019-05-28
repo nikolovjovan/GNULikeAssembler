@@ -2,6 +2,9 @@
 test: .skip 100, 0xff
 test2: .skip 0x43, 057
 .skip 0b10110110
+.byte   ~0b00100010, 		  074, 	 -135, 		0xf2
+.word 		-0b0101010101010101,  	~0356,   	6421, 	0x3f2a
+# .word 		~56,  	031  ,   	65536	 , 	0x3f2a # value 65536 is larger than a word value
 
 .equ num, 45
 
@@ -12,12 +15,13 @@ test2: .skip 0x43, 057
 .eXtERN printf, test, 		s2areage._est  # comment parsing
 
    MaIn:    # 		test comment
-test3: mov	r0, &num
-	add r5, [r2]
-	test r2[0x5], r0
-	subb r2l, r3h
-	xchgw r0, sp
-	halt
+test3: mov	r0, &num	# 1 + 1 + 3 = 5B
+	add r5, [r2]		# 1 + 1 + 1 = 3B
+	test r2[0x5], r0	# 1 + 2 + 1 = 4B
+	and r4[536], r0		# 1 + 3 + 1 = 5B
+	subb r2l, r3h		# 1 + 1 + 1 = 3B
+	xchgw r0, sp		# 1 + 1 + 1 = 3B
+	halt				# 1         = 1B
 
 	.data
 	n:  .word 0x195f

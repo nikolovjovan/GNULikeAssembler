@@ -26,7 +26,7 @@
 #define REGEX_EXPR "[^#]*?"
 
 // Immediate addressing modes
-#define REGEX_ADR_IMM_B REGEX_VAL_B "|&" REGEX_SYM // <val> or &<symbol_name> (immediate value embedded inside the instruction)
+#define REGEX_ADR_IMM_B REGEX_VAL_B // <val> (immediate value embedded inside the instruction)
 #define REGEX_ADR_IMM_W REGEX_VAL_W "|&" REGEX_SYM // <val> or &<symbol_name> (immediate value embedded inside the instruction)
 
 // Register addressing modes
@@ -110,7 +110,6 @@ typedef struct section_info
     std::string name;          // Section name
     Elf16_Word  type;          // Section type
     Elf16_Word  flags;         // Section flags
-    Elf16_Word  alignment;     // Section alignment
     Elf16_Addr  loc_cnt;       // Section location counter
     Elf16_Addr  shdrtab_index; // Section header table index
 } Section_Info;
@@ -158,6 +157,17 @@ private:
     bool add_symbol(const std::string &symbol);
     bool add_shdr(const std::string &name, Elf16_Word type, Elf16_Word flags);
 
+    unsigned get_operand_size(const std::string &operand);
+
+    std::regex regex_split, regex_symbol, regex_byte, regex_word, regex_op1b, regex_op2b;
+
+    const std::string regex_split_string    = "\\s*,",
+                      regex_symbol_string   = "\\s*(" REGEX_SYM ")\\s*",
+                      regex_byte_string     = "\\s*(" REGEX_VAL_B ")\\s*",
+                      regex_word_string     = "\\s*(" REGEX_VAL_W ")\\s*",
+                      regex_op1b_string     = "\\s*(" REGEX_ADR_REGDIR_B "|" REGEX_ADR_REGDIR_W "|\\[\\s*(?:" REGEX_ADR_REGDIR_W ")\\s*\\])\\s*",
+                      regex_op2b_string     = "\\s*(?:(" REGEX_ADR_IMM_B ")|(?:" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_ADR_IMM_B ")\\s*\\])\\s*";
+
     std::regex regex_exprs[REGEX_CNT];
 
     const std::string regex_strings[REGEX_CNT] = {
@@ -180,20 +190,20 @@ private:
 
         REGEX_START // 1-address instructions
         "(?:"
-        "(int)\\s+(" REGEX_ADR_IMM_B ")|"
+        "(int)()\\s+(" REGEX_ADR_IMM_B ")|"
 
         "(not)(b)\\s+(" REGEX_ADR_REGMEM_B ")|"
         "(not)(w?)\\s+(" REGEX_ADR_REGMEM_W ")|"
 
-        "(pushf)|" // pushf <=> push psw (push psw is not allowed but it is coded)
-        "(popf)|" // popf <=> pop psw (pop psw is not allowed but it is coded)
+        "(pushf)()|" // pushf <=> push psw (push psw is not allowed but it is coded)
+        "(popf)()|" // popf <=> pop psw (pop psw is not allowed but it is coded)
 
         "(push)(b)\\s+(" REGEX_ADR_IMMREG_B "|" REGEX_ADR_MEM ")|"
         "(push)(w?)\\s+(" REGEX_ADR_IMMREG_W "|" REGEX_ADR_MEM ")|"
         "(pop)(b)\\s+(" REGEX_ADR_REGMEM_B ")|"
         "(pop)(w?)\\s+(" REGEX_ADR_REGMEM_W ")|"
 
-        "(jmp|jeq|jne|jgt|call)\\s+(" REGEX_ADR_MEM ")"
+        "(jmp|jeq|jne|jgt|call)()\\s+(" REGEX_ADR_MEM ")"
         ")"
         REGEX_END,
 
