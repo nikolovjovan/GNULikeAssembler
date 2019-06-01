@@ -1,5 +1,6 @@
 .data
 test: .skip 100, 0xff
+.align 8, 03, 6
 test2: .skip 0x43, 057
 .skip 0b10110110
 .byte   ~0b00100010, 		  074, 	 -135, 		0xf2

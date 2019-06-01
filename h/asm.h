@@ -16,11 +16,11 @@
 // Valid symbol format: starts with '.' or '_' or 'a-z' then can also contain digits
 #define REGEX_SYM "[._a-z][.\\w]*"
 
-// Valid byte value format: binary ex. 0b[0|1]+; octal ex. 0[0-7]+; decimal ex. [1-9][0-9]*; hexadecimal ex. 0x[0-9a-f]+
-#define REGEX_VAL_B "[-~]?(?:0b[0-1]{1,8}|0[0-7]{1,3}|[1-9]\\d{0,2}|0x[\\da-f]{1,2})"
+// Valid byte value format: binary ex. 0b[0|1]+; octal ex. 0[0-7]+; decimal ex. 0|[1-9][0-9]*; hexadecimal ex. 0x[0-9a-f]+
+#define REGEX_VAL_B "[-~]?(?:0b[0-1]{1,8}|0[0-7]{1,3}|0|[1-9]\\d{0,2}|0x[\\da-f]{1,2})"
 
 // Valid word value format: binary ex. 0b[0|1]+; octal ex. 0[0-7]+; decimal ex. [1-9][0-9]*; hexadecimal ex. 0x[0-9a-f]+
-#define REGEX_VAL_W "[-~]?(?:0b[0-1]{1,16}|0[0-7]{1,6}|[1-9]\\d{0,4}|0x[\\da-f]{1,4})"
+#define REGEX_VAL_W "[-~]?(?:0b[0-1]{1,16}|0[0-7]{1,6}|0|[1-9]\\d{0,4}|0x[\\da-f]{1,4})"
 
 // Valid expression format: anything that does not match a comment
 #define REGEX_EXPR "[^#]*?"
@@ -94,6 +94,7 @@ enum class Pass { First, Second };
 enum class Parse_Result { Success, Error, End };
 
 #define REGEX_CNT           6
+#define OPCODE_CNT          26
 #define DIRECTIVE_CNT       13
 #define ZEROADDRINSTR_CNT   4
 #define ONEADDRINSTR_CNT    11
@@ -143,6 +144,7 @@ private:
 
     bool run_first_pass();
     bool run_second_pass();
+    void write_output();
 
     Parse_Result parse(const std::string &line);
     Parse_Result parse_label(const std::smatch &match, unsigned index);
@@ -156,6 +158,8 @@ private:
 
     bool add_symbol(const std::string &symbol);
     bool add_shdr(const std::string &name, Elf16_Word type, Elf16_Word flags);
+
+    void global_symbol(const std::string &str);
 
     unsigned get_operand_size(const std::string &operand);
 
@@ -231,6 +235,14 @@ private:
     const std::string two_addr_instr[TWOADDRINSTR_CNT]      = { "xchg", "mov", "add", "sub", "mul", "div", "cmp", "and", "or", "xor", "test" };
 
     std::map<std::string, unsigned> directive_map, zero_addr_instr_map, one_addr_instr_map, two_addr_instr_map;
+
+    const std::string opcodeMnems[OPCODE_CNT] = {
+        "nop", "halt", "xchg", "int", "mov", "add", "sub", "mul", "div", "cmp",
+        "not", "and", "or", "xor", "test", "shl", "shr", "push", "pop",
+        "jmp", "jeq", "jne", "jgt", "call", "ret", "iret"
+    };
+
+    std::map<std::string, Elf16_Half>   opcode_map;
 };
 
 #endif  // asm.h

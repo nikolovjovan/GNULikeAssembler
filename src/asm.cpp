@@ -7,6 +7,7 @@
 using std::cerr;
 using std::cout;
 using std::ifstream;
+using std::ios;
 using std::map;
 using std::regex;
 using std::smatch;
@@ -81,6 +82,10 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
         one_addr_instr_map[one_addr_instr[i]] = i;
     for (unsigned i = 0; i < TWOADDRINSTR_CNT; ++i)
         two_addr_instr_map[two_addr_instr[i]] = i;
+
+    // Initializing opcode map
+    for (Elf16_Half oc = 0; oc < OPCODE_CNT; ++oc)
+        opcode_map[opcodeMnems[oc]] = oc << 3; // OC4 OC3 OC2 OC1 OC0 (S UN UN)
 }
 
 Assembler::~Assembler()
@@ -131,7 +136,7 @@ bool Assembler::assemble()
     for (auto it = lc_map.begin(); it != lc_map.end(); ++it)
         cout << "Section name:\t" << it->first << "\tLocation counter:\t" << it->second << '\n';
 
-    // print to file
+    write_output();
 
     return true;
 }
@@ -171,7 +176,57 @@ bool Assembler::run_first_pass()
 bool Assembler::run_second_pass()
 {
     pass = Pass::Second;
+    bool res = true;
+    string line;
+    unsigned lnum;
+
+    if (input.is_open())
+        input.close();
+    input.open(input_file, ifstream::in);
+
+    for (lnum = 1; !input.eof(); ++lnum)
+    {
+        getline(input, line);
+        cout << lnum << ":\t" << line << '\n'; // temporary
+        Parse_Result ret = parse(line);
+        if (ret == Parse_Result::Success)
+            continue;
+        if (ret == Parse_Result::Error)
+        {
+            cerr << "ERROR: Failed to parse line: " << lnum << "!\n";
+            res = false;
+        }
+        else
+            cout << "End of file reached at line: " << lnum << "!\n";
+        break;
+    }
+
+    input.close();
     return true;
+}
+
+void Assembler::write_output()
+{
+    if (output.is_open())
+        output.close();
+    if (binary)
+    {
+        output.open(output_file, ios::out | ios::binary);
+        // not implemented yet
+    }
+    else
+    {
+        output.open(output_file, ifstream::out);
+
+        // temporary
+        for (auto it = section_map.begin(); it != section_map.end(); ++it)
+        {
+            output << "Section: " << it->first << '\n';
+            for (unsigned i = 0; i < it->second.size(); ++i)
+                output << (unsigned) (it->second[i]) << ' ';
+            output << '\n';
+        }
+    }
 }
 
 Parse_Result Assembler::parse(const string &s)
@@ -294,6 +349,7 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
                     return Parse_Result::Error;
                 }
             }
+            section_map[cur_sect.name]; // initialize an empty section vector
         }
 
         cur_sect.type = shdrtab_map.at(cur_sect.name).shdr.sh_type;
@@ -314,7 +370,8 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
     case Directive::Extern:
     {
         cout << " SYMBOLS: " << match.str(index++);
-        // second pass modify symbol info
+        if (pass == Pass::First) return Parse_Result::Success;
+        global_symbol(match.str(index++));
         break;
     }
     case Directive::Byte:
@@ -334,6 +391,10 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
                     cerr << "ERROR: Data cannot be initialized in .bss section!\n";
                     return Parse_Result::Error;
                 }
+
+                if (pass == Pass::Second)
+                    section_map.at(cur_sect.name).push_back(byte);
+
                 cur_sect.loc_cnt += sizeof(Elf16_Half);
             }
             else return Parse_Result::Error;
@@ -356,6 +417,13 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
                     cerr << "ERROR: Data cannot be initialized in .bss section!\n";
                     return Parse_Result::Error;
                 }
+
+                if (pass == Pass::Second)
+                {
+                    section_map.at(cur_sect.name).push_back(word & 0x00ff); // little-endian,
+                    section_map.at(cur_sect.name).push_back(word >> 8);
+                }
+
                 cur_sect.loc_cnt += sizeof(Elf16_Word);
             }
             else return Parse_Result::Error;
@@ -394,14 +462,24 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
     {
         if (cur_sect.name == "") return Parse_Result::Error;
 
+        string param1 = match.str(index++), param2 = match.str(index++), param3 = match.str(index++);
+
+        if (param1 == "")
+        {
+            cerr << "ERROR: Empty alignment size parameter!\n";
+            return Parse_Result::Error;
+        }
+
         Elf16_Half alignment;
-        if (!decode_byte(match.str(index++), alignment)) return Parse_Result::Error;
+        if (!decode_byte(param1, alignment)) return Parse_Result::Error;
 
         Elf16_Half fill;
-        if (!decode_byte(match.str(index++), fill)) return Parse_Result::Error;
+        if (param2 == "") fill = 0x00;
+        else if (!decode_byte(param2, fill)) return Parse_Result::Error;
 
         Elf16_Half max;
-        if (!decode_byte(match.str(index++), max)) return Parse_Result::Error;
+        if (param3 == "") max = alignment;
+        else if (!decode_byte(param3, max)) return Parse_Result::Error;
 
         if (!alignment || alignment & (alignment - 1))
         {
@@ -410,24 +488,56 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         }
         
         Elf16_Word remainder = cur_sect.loc_cnt & (alignment - 1);
-        if (remainder && pass == Pass::First)
-            cur_sect.loc_cnt += alignment - remainder;
+        if (remainder)
+        {
+            unsigned fill_size = alignment - remainder;
+
+            if (fill_size > max)
+            {
+                cerr << "ERROR: Required fill: " << fill_size << " is larger than max allowed: " << (unsigned) max << "! Cannot apply alignment!\n";
+                return Parse_Result::Error;
+            }
+
+            if (pass == Pass::Second)
+                for (unsigned i = 0; i < fill_size; ++i)
+                    section_map.at(cur_sect.name).push_back(fill);
+
+            cur_sect.loc_cnt += fill_size;
+        }
 
         cout << " BYTES: " << (unsigned) alignment << " FILL: " << (unsigned) fill << " MAX: " << (unsigned) max;
         break;
     }
     case Directive::Skip:
     {
-        Elf16_Half bytes;
-        if (!decode_byte(match.str(index++), bytes)) return Parse_Result::Error;
+        if (cur_sect.flags & SHF_EXECINSTR)
+        {
+            cerr << "ERROR: Data in .text section!\n";
+            return Parse_Result::Error;
+        }
+
+        string param1 = match.str(index++), param2 = match.str(index++);
+
+        if (param1 == "")
+        {
+            cerr << "ERROR: Empty skip size parameter!\n";
+            return Parse_Result::Error;
+        }
+
+        Elf16_Half size;
+        if (!decode_byte(param1, size)) return Parse_Result::Error;
 
         Elf16_Half fill;
-        if (!decode_byte(match.str(index++), fill)) return Parse_Result::Error;
+        if (param2 == "") fill = 0x00;
+        else if (!decode_byte(param2, fill)) return Parse_Result::Error;
 
-        if (pass == Pass::First)
-            cur_sect.loc_cnt += bytes;
+        if (pass == Pass::Second)
+            for (unsigned i = 0; i < size; ++i)
+                section_map.at(cur_sect.name).push_back(fill);
 
-        cout << " BYTES: " << (unsigned) bytes << " FILL: " << (unsigned) fill;
+        cur_sect.loc_cnt += size;
+
+        cout << " SIZE: " << (unsigned) size << " FILL: " << (unsigned) fill;
         break;
     }
     default:
@@ -446,6 +556,12 @@ Parse_Result Assembler::parse_zeroaddr(const smatch &match, unsigned index)
 {
     if (match.str(index).empty())
         return Parse_Result::Error;
+
+    if (!(cur_sect.flags & SHF_EXECINSTR))
+    {
+        cerr << "ERROR: Code in unexecutable section: \"" << cur_sect.name << "\"!\n";
+        return Parse_Result::Error;
+    }
 
     Parse_Result res = Parse_Result::Success;
     string opMnem = lowercase(match.str(index++));
@@ -492,6 +608,12 @@ Parse_Result Assembler::parse_oneaddr(const smatch &match, unsigned index)
 {
     if (match.str(index).empty())
         return Parse_Result::Error;
+
+    if (!(cur_sect.flags & SHF_EXECINSTR))
+    {
+        cerr << "ERROR: Code in unexecutable section: \"" << cur_sect.name << "\"!\n";
+        return Parse_Result::Error;
+    }
 
     Parse_Result res = Parse_Result::Success;
     string opMnem = lowercase(match.str(index++));
@@ -559,6 +681,12 @@ Parse_Result Assembler::parse_twoaddr(const smatch &match, unsigned index)
 {
     if (match.str(index).empty())
         return Parse_Result::Error;
+
+    if (!(cur_sect.flags & SHF_EXECINSTR))
+    {
+        cerr << "ERROR: Code in unexecutable section: \"" << cur_sect.name << "\"!\n";
+        return Parse_Result::Error;
+    }
 
     Parse_Result res = Parse_Result::Success;
     string opMnem = lowercase(match.str(index++)),
@@ -659,6 +787,7 @@ bool Assembler::decode_word(const string &str, Elf16_Word &word)
     int first = inv || neg;
     unsigned long temp;
     if (value[first] != '0') temp = stoul(value.substr(first), 0, 10);
+    else if (value.length() == first + 1) temp = 0; // 0 || ~0 || -0
     else if (value[first + 1] == 'b') temp = stoul(value.substr(first + 2), 0, 2);
     else if (value[first + 1] != 'x') temp = stoul(value.substr(first + 1), 0, 8);
     else temp = stoul(value.substr(first + 2), 0, 16);
@@ -688,6 +817,7 @@ bool Assembler::decode_byte(const string &str, Elf16_Half &byte)
     int first = inv || neg;
     unsigned long long temp;
     if (value[first] != '0') temp = stoul(value.substr(first), 0, 10);
+    else if (value.length() == first + 1) temp = 0; // 0 || ~0 || -0
     else if (value[first + 1] == 'b') temp = stoul(value.substr(first + 2), 0, 2);
     else if (value[first + 1] != 'x') temp = stoul(value.substr(first + 1), 0, 8);
     else temp = stoul(value.substr(first + 2), 0, 16);
@@ -744,6 +874,28 @@ bool Assembler::add_shdr(const string &name, Elf16_Word type, Elf16_Word flags)
     shstrtab_vect.push_back(name);
 
     return true;
+}
+
+void Assembler::global_symbol(const std::string &str)
+{
+    string sym;
+    smatch match;
+    for (string token : tokenize(str, regex_split))
+        if (regex_match(token, match, regex_symbol))
+        {
+            sym = match.str(1);
+            if (symtab_map.count(sym) > 0)
+            {
+                int type = ELF16_ST_TYPE(symtab_map.at(sym).sym.st_info);
+                symtab_map.at(sym).sym.st_info = ELF16_ST_INFO(STB_GLOBAL, type);
+            }
+            else
+            {
+                strtab_vect.push_back(sym);
+                Symtab_Entry entry(0, 0, ELF16_ST_INFO(STB_GLOBAL, STT_OBJECT), 0, "");
+                symtab_map.insert(Symtab_Pair(sym, entry));
+            }
+        }
 }
 
 unsigned Assembler::get_operand_size(const string &operand)
