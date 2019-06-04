@@ -13,6 +13,20 @@
 enum class Pass { First, Second };
 enum class Result { Success, Error, End };
 
+class Addressing_Mode
+{
+public:
+    enum
+    {
+        Imm         = 0x0 << 5, // 0 0 0 R3 R2 R1 R0 L/H
+        RegDir      = 0x1 << 5, // 0 0 1 R3 R2 R1 R0 L/H
+        RegInd      = 0x2 << 5, // 0 1 0 R3 R2 R1 R0 L/H
+        RegIndOff8  = 0x3 << 5, // 0 1 1 R3 R2 R1 R0 L/H
+        RegIndOff16 = 0x4 << 5, // 1 0 0 R3 R2 R1 R0 L/H
+        Mem         = 0x5 << 5  // 1 0 1 R3 R2 R1 R0 L/H
+    };
+};
+
 typedef struct Line_Info
 {
     unsigned    line_num;

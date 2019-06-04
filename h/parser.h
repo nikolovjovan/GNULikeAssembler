@@ -12,7 +12,6 @@
 
 struct Content_Type { enum { None = 0, Directive, Instruction }; };
 struct Operand_Size { enum { None = 0, Byte, Word }; };
-struct Addressing_Mode { enum { Imm = 0, RegDir, RegInd, RegIndOff8, RegIndOff16, Mem }; };
 
 typedef struct Directive
 {
