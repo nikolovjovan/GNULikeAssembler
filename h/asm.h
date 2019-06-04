@@ -51,9 +51,8 @@ typedef struct Symtab_Entry
 
     Elf16_Addr index = symtab_index++;
     Elf16_Sym sym;
-    std::string sect_name;
 
-    Symtab_Entry(Elf16_Word name, Elf16_Addr value, uint8_t info, Elf16_Half shndx, std::string section)
+    Symtab_Entry(Elf16_Word name, Elf16_Addr value, uint8_t info, Elf16_Section shndx)
     {
         sym.st_name     = name;     // String table index
         sym.st_value    = value;    // Symbol value = 1* label - current location counter, 2* constant - .equ value
@@ -61,7 +60,6 @@ typedef struct Symtab_Entry
         sym.st_info     = info;     // Symbol type and binding
         sym.st_other    = 0;        // No defined meaning, 0
         sym.st_shndx    = shndx;    // Section header table index
-        sect_name       = section;  // Section name
     }
 } Symtab_Entry;
 
@@ -87,11 +85,36 @@ typedef struct Shdrtab_Entry
     }
 } Shdrtab_Entry;
 
+typedef struct Reltab_Entry
+{
+    Elf16_Rel   rel;
+
+    Reltab_Entry(Elf16_Word info, Elf16_Addr offset = 0)
+    {
+        rel.r_offset = offset;
+        rel.r_info = info;
+    }
+} Reltab_Entry;
+
 typedef std::pair<const std::string, Symtab_Entry>  Symtab_Pair;
 typedef std::pair<const std::string, Shdrtab_Entry> Shdrtab_Pair;
 
 enum class Pass { First, Second };
 enum class Parse_Result { Success, Error, End };
+
+class Addressing_Mode
+{
+public:
+    enum
+    {
+        Imm         = 0x0 << 5, // 0 0 0 R3 R2 R1 R0 L/H
+        RegDir      = 0x1 << 5, // 0 0 1 R3 R2 R1 R0 L/H
+        RegInd      = 0x2 << 5, // 0 1 0 R3 R2 R1 R0 L/H
+        RegIndOff8  = 0x3 << 5, // 0 1 1 R3 R2 R1 R0 L/H
+        RegIndOff16 = 0x4 << 5, // 1 0 0 R3 R2 R1 R0 L/H
+        Mem         = 0x5 << 5  // 1 0 1 R3 R2 R1 R0 L/H
+    };
+};
 
 #define REGEX_CNT           6
 #define OPCODE_CNT          26
@@ -131,10 +154,11 @@ private:
 
     Pass pass;
 
-    std::map<std::string, Elf16_Addr>               lc_map;
-    std::map<std::string, Symtab_Entry>             symtab_map;
-    std::map<std::string, Shdrtab_Entry>            shdrtab_map;
-    std::map<std::string, std::vector<Elf16_Half>>  section_map;
+    std::map<std::string, Elf16_Addr>                   lc_map;
+    std::map<std::string, Symtab_Entry>                 symtab_map;
+    std::map<std::string, Shdrtab_Entry>                shdrtab_map;
+    std::map<std::string, std::vector<Reltab_Entry>>    reltab_map;
+    std::map<std::string, std::vector<Elf16_Half>>      section_map;
 
     std::vector<std::string>    strtab_vect;
     std::vector<std::string>    shstrtab_vect;
@@ -157,13 +181,17 @@ private:
     bool decode_byte(const std::string &value, Elf16_Half &result);
 
     bool add_symbol(const std::string &symbol);
-    bool add_shdr(const std::string &name, Elf16_Word type, Elf16_Word flags);
+    bool add_shdr(const std::string &name, Elf16_Word type, Elf16_Word flags, bool reloc = false, Elf16_Word info = 0, Elf16_Word entsize = 0);
 
     void global_symbol(const std::string &str);
 
     unsigned get_operand_size(const std::string &operand);
+    bool insert_operand(const std::string &operand, const char size, Elf16_Addr next_instr);
+    bool add_reloc(const std::string symbol, Elf16_Half type, Elf16_Addr next_instr);
 
-    std::regex regex_split, regex_symbol, regex_byte, regex_word, regex_op1b, regex_op2b;
+    std::regex regex_split, regex_symbol, regex_byte, regex_word, regex_op1b, regex_op2b,
+               regex_imm_b, regex_imm_w, regex_regdir_b, regex_regdir_w, regex_regind,
+               regex_regindoff, regex_regindsym, regex_memsym, regex_memabs;
 
     const std::string regex_split_string    = "\\s*,",
                       regex_symbol_string   = "\\s*(" REGEX_SYM ")\\s*",
@@ -181,7 +209,7 @@ private:
 
         REGEX_START // Directives
         "\\.(?:"
-        "(section)\\s+(" REGEX_SYM ")\\s*(?:,\\s*\"(b?r?w?x?)\")?|" // flags: b-bss, d-data, r-read-only, w-writable, x-executable, 0-9-power of 2 alignment \\d?
+        "(section)\\s+(" REGEX_SYM ")\\s*(?:,\\s*\"(a?e?w?x?)\")?|" // flags: a-allocatable, e-excluded from executable and shared library (bss), w-writable, x-executable
         "(text|data|bss|end)|"
         "(global|extern|byte|word)\\s+(" REGEX_EXPR ")|"
         "(equ|set)\\s+(" REGEX_SYM "),\\s*(" REGEX_EXPR ")|"

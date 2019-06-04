@@ -33,8 +33,8 @@ test3: mov	r0, &num	# 1 + 1 + 3 = 5B
 #	t$test:				 #invalid label contains $
 	test_:   
 
-.section 		 testsection	 , 	"bw" # flags, see asm.h
-# .section 		 testsection2	 , 	"brrwd" # double r should error
+.section	  	.rodata	 , 		"a" # .rodata is SHF_ALLOC but not SHF_WRITE
+# .section 		 testsection2	 , 	"awwx" # double w should error
 
 .end
 

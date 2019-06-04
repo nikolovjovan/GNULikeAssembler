@@ -136,9 +136,10 @@ typedef struct elf16_shdr
 
 // Legal values for sh_flags (section flags)
 
-#define SHF_WRITE       0x1 // Writable
-#define SHF_ALLOC       0x2 // Occupies memory during execution
-#define SHF_EXECINSTR   0x4 // Executable
+#define SHF_WRITE       0x1     // Writable
+#define SHF_ALLOC       0x2     // Occupies memory during execution
+#define SHF_EXECINSTR   0x4     // Executable
+#define SHF_INFO_LINK   0x40    // sh_info contains SHT index (used for reloc tables)
 
 // Symbol table entry
 

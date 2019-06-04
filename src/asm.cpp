@@ -51,9 +51,8 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
     cur_sect.loc_cnt        = 0;
 
     // Inserting a dummy symbol
-    Symtab_Entry dummySym(0, 0, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), 0, "");
+    Symtab_Entry dummySym(0, 0, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_UNDEF);
     symtab_map.insert(Symtab_Pair("", dummySym));
-    // symtab_map.emplace("", dummySym);
     symtab_vect.push_back(dummySym);
     strtab_vect.push_back("");
 
@@ -70,6 +69,15 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
     regex_word.assign(regex_word_string, regex::icase | regex::optimize);
     regex_op1b.assign(regex_op1b_string, regex::icase | regex::optimize);
     regex_op2b.assign(regex_op2b_string, regex::icase | regex::optimize);
+    regex_imm_b.assign("\\s*(" REGEX_ADR_IMM_B ")\\s*", regex::icase | regex::optimize);
+    regex_imm_w.assign("\\s*(" REGEX_ADR_IMM_W ")\\s*", regex::icase | regex::optimize);
+    regex_regdir_b.assign("\\s*(" REGEX_ADR_REGDIR_B ")\\s*", regex::icase | regex::optimize);
+    regex_regdir_w.assign("\\s*(" REGEX_ADR_REGDIR_W ")\\s*", regex::icase | regex::optimize);
+    regex_regind.assign("\\s*\\[\\s*(" REGEX_ADR_REGDIR_W ")\\s*\\]\\s*", regex::icase | regex::optimize);
+    regex_regindoff.assign("\\s*(" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_VAL_W ")\\s*\\]\\s*", regex::icase | regex::optimize);
+    regex_regindsym.assign("\\s*(" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_SYM ")\\s*\\]\\s*", regex::icase | regex::optimize);
+    regex_memsym.assign("\\s*(\\$?)(" REGEX_SYM ")\\s*", regex::icase | regex::optimize);
+    regex_memabs.assign("\\s*\\*(" REGEX_VAL_W ")\\s*", regex::icase | regex::optimize);
     for (unsigned i = 0; i < REGEX_CNT; ++i)
         regex_exprs[i].assign(regex_strings[i], regex::icase | regex::optimize);
 
@@ -209,6 +217,8 @@ void Assembler::write_output()
 {
     if (output.is_open())
         output.close();
+    // THIS NEEDS TO BE SET BEFORE WRITING TO OUTPUT FILE!!!
+    // shdrtab_map.at(relshdr).shdr.sh_link    = shdrtab_map.at(".strtab").index;
     if (binary)
     {
         output.open(output_file, ios::out | ios::binary);
@@ -222,8 +232,17 @@ void Assembler::write_output()
         for (auto it = section_map.begin(); it != section_map.end(); ++it)
         {
             output << "Section: " << it->first << '\n';
-            for (unsigned i = 0; i < it->second.size(); ++i)
-                output << (unsigned) (it->second[i]) << ' ';
+            if (it->first == ".text")
+                for (unsigned i = 0; i < it->second.size(); ++i)
+                {
+                    Elf16_Half byte = it->second[i];
+                    for (unsigned j = 0; j < 8; ++j)
+                        output << (bool) (byte & (0x80 >> j));
+                    output << (i % 4 ? ' ' : '\n');
+                }
+            else
+                for (unsigned i = 0; i < it->second.size(); ++i)
+                    output << (unsigned) (it->second[i]) << ' ';
             output << '\n';
         }
     }
@@ -319,36 +338,30 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
 
         if (cur_sect.loc_cnt == 0 && pass == Pass::First)
         {
-            if (flags == "")
+            Elf16_Word sh_type = 0, sh_flags = 0;
+            if (flags == "") // try to infer section type and flags from section name
             {
-                // try to infer section type and flags from section name
-                if (name == ".bss") add_shdr(name, SHT_NOBITS, SHF_WRITE);
-                else if (name == ".data") add_shdr(name, SHT_PROGBITS, SHF_ALLOC);
-                else if (name == ".text") add_shdr(name, SHT_PROGBITS, SHF_EXECINSTR);
-                else
+                sh_type = name == ".bss" ? SHT_NOBITS : SHT_PROGBITS;
+                sh_flags = SHF_ALLOC;
+                if (name == ".bss" || name == ".data") sh_flags |= SHF_WRITE;
+                else if (name == ".text") sh_flags |= SHF_EXECINSTR;
+                else if (name != ".rodata") // .rodata has only flags SHF_ALLOC which are set above
                 {
                     cerr << "ERROR: Cannot infer section type and flags from section name: \"" << name << "\"\n";
                     return Parse_Result::Error;
                 }
+                
             }
-            else
+            else // parse flags string
             {
-                // parse flags string
-                bool nobits = false, read = false, write = false, execute = false;
+                sh_type = SHT_PROGBITS;
                 for (char c : flags)
-                    if (c == 'b') nobits = true;
-                    else if (c == 'r') read = true;
-                    else if (c == 'w') write = true;
-                    else if (c == 'x') execute = true;
-                if (nobits && write && !execute) add_shdr(name, SHT_NOBITS, SHF_WRITE);
-                else if (!nobits && write && !execute) add_shdr(name, SHT_PROGBITS, SHF_ALLOC);
-                else if (!nobits && !write && execute) add_shdr(name, SHT_PROGBITS, SHF_EXECINSTR);
-                else
-                {
-                    cerr << "ERROR: Invalid section flags combination: \"" << flags << "\"\n";
-                    return Parse_Result::Error;
-                }
+                    if (c == 'a') sh_flags |= SHF_ALLOC;
+                    else if (c == 'e') sh_type = SHT_NOBITS;
+                    else if (c == 'w') sh_flags |= SHF_WRITE;
+                    else if (c == 'x') sh_flags |= SHF_EXECINSTR;
             }
+            add_shdr(name, sh_type, sh_flags);
             section_map[cur_sect.name]; // initialize an empty section vector
         }
 
@@ -397,7 +410,11 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
 
                 cur_sect.loc_cnt += sizeof(Elf16_Half);
             }
-            else return Parse_Result::Error;
+            else
+            {
+                cerr << "ERROR: Failed to decode: \"" << token << "\" as a byte value!\n";
+                return Parse_Result::Error;
+            }
         break;
     }
     case Directive::Word:
@@ -420,13 +437,17 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
 
                 if (pass == Pass::Second)
                 {
-                    section_map.at(cur_sect.name).push_back(word & 0x00ff); // little-endian,
+                    section_map.at(cur_sect.name).push_back(word & 0x00ff); // little-endian
                     section_map.at(cur_sect.name).push_back(word >> 8);
                 }
 
                 cur_sect.loc_cnt += sizeof(Elf16_Word);
             }
-            else return Parse_Result::Error;
+            else
+            {
+                cerr << "ERROR: Failed to decode: \"" << token << "\" as a word value!\n";
+                return Parse_Result::Error;
+            }
         break;
     }
     case Directive::Equ:
@@ -435,7 +456,11 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         // temporary, need to implement expression parsing
         string symbol = match.str(index++), expr = match.str(index++);
         Elf16_Word word;
-        if (!decode_word(expr, word)) return Parse_Result::Error;
+        if (!decode_word(expr, word))
+        {
+            cerr << "ERROR: Failed to decode: \"" << expr << "\" as a word value!\n";
+            return Parse_Result::Error;
+        }
         if (symtab_map.count(symbol) > 0)
         {
             if (directive_map[dir] == Directive::Equ)
@@ -451,7 +476,7 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         else
         {
             strtab_vect.push_back(symbol);
-            Symtab_Entry entry(strtab_vect.size() - 1, word, ELF16_ST_INFO(STB_LOCAL, STT_OBJECT), cur_sect.shdrtab_index, cur_sect.name);
+            Symtab_Entry entry(strtab_vect.size() - 1, word, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_ABS);
             symtab_map.insert(Symtab_Pair(symbol, entry));
             symtab_vect.push_back(entry);
         }
@@ -471,15 +496,27 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         }
 
         Elf16_Half alignment;
-        if (!decode_byte(param1, alignment)) return Parse_Result::Error;
+        if (!decode_byte(param1, alignment))
+        {
+            cerr << "ERROR: Failed to decode: \"" << param1 << "\" as a byte value!\n";
+            return Parse_Result::Error;
+        }
 
         Elf16_Half fill;
         if (param2 == "") fill = 0x00;
-        else if (!decode_byte(param2, fill)) return Parse_Result::Error;
+        else if (!decode_byte(param2, fill))
+        {
+            cerr << "ERROR: Failed to decode: \"" << param2 << "\" as a byte value!\n";
+            return Parse_Result::Error;
+        }
 
         Elf16_Half max;
         if (param3 == "") max = alignment;
-        else if (!decode_byte(param3, max)) return Parse_Result::Error;
+        else if (!decode_byte(param3, max))
+        {
+            cerr << "ERROR: Failed to decode: \"" << param3 << "\" as a byte value!\n";
+            return Parse_Result::Error;
+        }
 
         if (!alignment || alignment & (alignment - 1))
         {
@@ -525,11 +562,19 @@ Parse_Result Assembler::parse_directive(const smatch &match, unsigned index)
         }
 
         Elf16_Half size;
-        if (!decode_byte(param1, size)) return Parse_Result::Error;
+        if (!decode_byte(param1, size))
+        {
+            cerr << "ERROR: Failed to decode: \"" << param1 << "\" as a byte value!\n";
+            return Parse_Result::Error;
+        }
 
         Elf16_Half fill;
         if (param2 == "") fill = 0x00;
-        else if (!decode_byte(param2, fill)) return Parse_Result::Error;
+        else if (!decode_byte(param2, fill))
+        {
+            cerr << "ERROR: Failed to decode: \"" << param2 << "\" as a byte value!\n";
+            return Parse_Result::Error;
+        }
 
         if (pass == Pass::Second)
             for (unsigned i = 0; i < size; ++i)
@@ -566,9 +611,14 @@ Parse_Result Assembler::parse_zeroaddr(const smatch &match, unsigned index)
     Parse_Result res = Parse_Result::Success;
     string opMnem = lowercase(match.str(index++));
 
+    if (pass == Pass::Second)
+        section_map.at(cur_sect.name).push_back(opcode_map[opMnem]);
+
     cout << "Parsed: MNEMOMIC = " << opMnem << ' ';
 
     cur_sect.loc_cnt += sizeof(Elf16_Half);
+
+    // this switch may be unnecessary...
 
     switch (zero_addr_instr_map[opMnem])
     {
@@ -616,27 +666,48 @@ Parse_Result Assembler::parse_oneaddr(const smatch &match, unsigned index)
     }
 
     Parse_Result res = Parse_Result::Success;
-    string opMnem = lowercase(match.str(index++));
-    string operand = lowercase(match.str(index));
+    string opMnem = lowercase(match.str(index++)),
+           opWidth = lowercase(match.str(index++)),
+           operand = lowercase(match.str(index));
 
-    cout << "Parsed: MNEMOMIC = " << opMnem << ' ';
+    if (opWidth == "")
+        opWidth = "w";
 
-    cur_sect.loc_cnt += sizeof(Elf16_Half);
-    cur_sect.loc_cnt += get_operand_size(operand);
+    cout << "Parsed: MNEMOMIC = " << opMnem << opWidth << ' ';
 
     switch (one_addr_instr_map[opMnem])
     {
     case OneAddrInstr::Pushf:
-        opMnem = "push";
-        operand = "psw";
+    {
+        if (pass == Pass::Second)
+        {
+            Elf16_Half opcode = opcode_map["push"] | 0x4;
+            Elf16_Half op1desc = Addressing_Mode::RegDir | 0xF << 1;
+            section_map.at(cur_sect.name).push_back(opcode);
+            section_map.at(cur_sect.name).push_back(op1desc);
+        }
+        cur_sect.loc_cnt += 2;
+        cout << "stack psw push";
+        return Parse_Result::Success;
+    }
+    case OneAddrInstr::Popf:
+    {
+        if (pass == Pass::Second)
+        {
+            Elf16_Half opcode = opcode_map["pop"] | 0x4;
+            Elf16_Half op1desc = Addressing_Mode::RegDir | 0xF << 1;
+            section_map.at(cur_sect.name).push_back(opcode);
+            section_map.at(cur_sect.name).push_back(op1desc);
+        }
+        cur_sect.loc_cnt += 2;
+        cout << "stack psw pop";
+        return Parse_Result::Success;
+    }
     case OneAddrInstr::Push:
     {
         cout << "stack push, OPERAND = ";
         break;
     }
-    case OneAddrInstr::Popf:
-        opMnem = "pop";
-        operand = "psw";
     case OneAddrInstr::Pop:
     {
         cout << "stack pop, OPERAND = ";
@@ -674,6 +745,19 @@ Parse_Result Assembler::parse_oneaddr(const smatch &match, unsigned index)
 
     cout << operand << '\n';
 
+    cur_sect.loc_cnt += sizeof(Elf16_Half);
+    Elf16_Addr next_instr = cur_sect.loc_cnt + get_operand_size(operand);
+
+    if (pass == Pass::First)
+        cur_sect.loc_cnt = next_instr;
+    else
+    {
+        Elf16_Half opcode = opcode_map[opMnem];
+        if (opWidth[0] == 'w') opcode |= 0x4; // S bit = 0 for byte sized operands, = 1 for word sized operands
+        section_map.at(cur_sect.name).push_back(opcode);
+        if (!insert_operand(operand, opWidth[0], next_instr)) return Parse_Result::Error;
+    }
+
     return res;
 }
 
@@ -698,10 +782,6 @@ Parse_Result Assembler::parse_twoaddr(const smatch &match, unsigned index)
         opWidth = "w";
 
     cout << "Parsed: MNEMOMIC = " << opMnem << opWidth << ' ';
-
-    cur_sect.loc_cnt += sizeof(Elf16_Half);
-    cur_sect.loc_cnt += get_operand_size(op1);
-    cur_sect.loc_cnt += get_operand_size(op2);
 
     switch (two_addr_instr_map[opMnem])
     {
@@ -769,6 +849,20 @@ Parse_Result Assembler::parse_twoaddr(const smatch &match, unsigned index)
 
     cout << " DST = " << op1 << " SRC = " << op2 << '\n';
 
+    cur_sect.loc_cnt += sizeof(Elf16_Half);
+    Elf16_Addr next_instr = cur_sect.loc_cnt + get_operand_size(op1) + get_operand_size(op2);
+
+    if (pass == Pass::First)
+        cur_sect.loc_cnt = next_instr;
+    else
+    {
+        Elf16_Half opcode = opcode_map[opMnem];
+        if (opWidth[0] == 'w') opcode |= 0x4; // S bit = 0 for byte sized operands, = 1 for word sized operands
+        section_map.at(cur_sect.name).push_back(opcode);
+        if (!insert_operand(op1, opWidth[0], next_instr)) return Parse_Result::Error;
+        if (!insert_operand(op2, opWidth[0], next_instr)) return Parse_Result::Error;
+    }
+
     return res;
 }
 
@@ -777,11 +871,7 @@ bool Assembler::decode_word(const string &str, Elf16_Word &word)
     word = 0;
     if (str == "") return true;
     smatch match;
-    if (!regex_match(str, match, regex_word))
-    {
-        cerr << "ERROR: Failed to decode: \"" << str << "\" as a word value!\n";
-        return false;
-    }
+    if (!regex_match(str, match, regex_word)) return false;
     string value = match.str(1);
     bool inv = value[0] == '~', neg = value[0] == '-';
     int first = inv || neg;
@@ -798,7 +888,6 @@ bool Assembler::decode_word(const string &str, Elf16_Word &word)
         else if (neg) word = -word;
         return true;
     }
-    cerr << "ERROR: Value: \"" << value << "\" is larger than a word value!\n";
     return false;
 }
 
@@ -807,11 +896,7 @@ bool Assembler::decode_byte(const string &str, Elf16_Half &byte)
     byte = 0;
     if (str == "") return true;
     smatch match;
-    if (!regex_match(str, match, regex_byte))
-    {
-        cerr << "ERROR: Failed to decode: \"" << str << "\" as a byte value!\n";
-        return false;
-    }
+    if (!regex_match(str, match, regex_byte)) return false;
     string value = match.str(1);
     bool inv = value[0] == '~', neg = value[0] == '-';
     int first = inv || neg;
@@ -828,7 +913,6 @@ bool Assembler::decode_byte(const string &str, Elf16_Half &byte)
         else if (neg) byte = -byte;
         return true;
     }
-    cerr << "ERROR: Value: \"" << value << "\" is larger than a byte value!\n";
     return false;
 }
 
@@ -840,36 +924,35 @@ bool Assembler::add_symbol(const string &symbol)
         return false;
     }
 
-    Elf16_Word st_name = 0;
-    string section = "";
+    Elf16_Word name = 0;
+    Elf16_Half type = STT_NOTYPE;
 
-    // for relocation sections...
     if (symbol != cur_sect.name)
     {
         strtab_vect.push_back(symbol);
-        st_name = strtab_vect.size() - 1;
-        section = cur_sect.name;
+        name = strtab_vect.size() - 1;
+        if (cur_sect.flags & SHF_EXECINSTR) type = STT_FUNC;
+        else if (cur_sect.flags & SHF_ALLOC) type = STT_OBJECT;
     }
+    else type = STT_SECTION;
 
-    Symtab_Entry entry(st_name, cur_sect.loc_cnt, ELF16_ST_INFO(STB_LOCAL, STT_OBJECT), cur_sect.shdrtab_index, section);
+    Symtab_Entry entry(name, cur_sect.loc_cnt, ELF16_ST_INFO(STB_LOCAL, type), cur_sect.shdrtab_index);
     symtab_map.insert(Symtab_Pair(symbol, entry));
-    // symtab_map.emplace(symbol, entry);
     symtab_vect.push_back(entry);
 
     return true;
 }
 
-bool Assembler::add_shdr(const string &name, Elf16_Word type, Elf16_Word flags)
+bool Assembler::add_shdr(const string &name, Elf16_Word type, Elf16_Word flags, bool reloc, Elf16_Word info, Elf16_Word entsize)
 {
-    // for relocation sections, not implemented yet
-    // if (name[0] != 'r')
-    //     if (add_symbol(cur_sect.name, cur_sect.loc_cnt) == -1)
-    //         return -1;
+    if (!reloc)
+        if (!add_symbol(cur_sect.name))
+            return false;
 
     if (shdrtab_map.count(name) > 0)
         return true;
 
-    Shdrtab_Entry entry(type, flags);
+    Shdrtab_Entry entry(type, flags, info, entsize);
     shdrtab_map.insert(Shdrtab_Pair(name, entry));
     shstrtab_vect.push_back(name);
 
@@ -892,7 +975,8 @@ void Assembler::global_symbol(const std::string &str)
             else
             {
                 strtab_vect.push_back(sym);
-                Symtab_Entry entry(0, 0, ELF16_ST_INFO(STB_GLOBAL, STT_OBJECT), 0, "");
+                // st_name may be 0 check this
+                Symtab_Entry entry(strtab_vect.size() - 1, 0, ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE), SHN_UNDEF);
                 symtab_map.insert(Symtab_Pair(sym, entry));
             }
         }
@@ -907,6 +991,221 @@ unsigned Assembler::get_operand_size(const string &operand)
     while (index < match.size() && match.str(index).empty())
         index++;
     Elf16_Half offset;
-    if (decode_byte(match.str(index), offset)) return 2;
+    if (decode_byte(match.str(index), offset))
+    {
+        if (offset == 0) return 1; // if offset is zero assume regind without offset
+        return 2;
+    }
     return 3;
+}
+
+bool Assembler::insert_operand(const string &operand, const char size, Elf16_Addr next_instr)
+{
+    smatch match;
+    if (size == 'b')
+    {
+        if (regex_match(operand, match, regex_imm_b))
+        {
+            Elf16_Half byte;
+            if (!decode_byte(match.str(1), byte))
+            {
+                cerr << "ERROR: Failed to decode: \"" << match.str(1) << "\" as a byte value!\n";
+                return false;
+            }
+            section_map.at(cur_sect.name).push_back(Addressing_Mode::Imm);
+            section_map.at(cur_sect.name).push_back(byte);
+            cur_sect.loc_cnt += 2;
+            return true;
+        }
+        else if (regex_match(operand, match, regex_regdir_b))
+        {
+            Elf16_Half opdesc = Addressing_Mode::RegDir;
+            string reg = match.str(1);
+            opdesc |= (reg[1] - '0') << 1;
+            if (reg[2] == 'h') opdesc |= 0x1;
+            section_map.at(cur_sect.name).push_back(opdesc);
+            cur_sect.loc_cnt++;
+            return true;
+        }
+    }
+    else
+    {
+        if (regex_match(operand, match, regex_imm_w))
+        {
+            section_map.at(cur_sect.name).push_back(Addressing_Mode::Imm);
+            cur_sect.loc_cnt++;
+            if (match.str(1)[0] == '&')
+            {
+                if (add_reloc(match.str(1).substr(1), R_VN_16, next_instr))
+                    return true;
+            }
+            else
+            {
+                Elf16_Word word;
+                if (!decode_word(match.str(1), word))
+                {
+                    cerr << "ERROR: Failed to decode: \"" << match.str(1) << "\" as a word value!\n";
+                    return false;
+                }
+                section_map.at(cur_sect.name).push_back(word & 0x00ff); // little-endian
+                section_map.at(cur_sect.name).push_back(word >> 8);
+                cur_sect.loc_cnt += 2;
+                return true;
+            }
+        }
+        else if (regex_match(operand, match, regex_regdir_w))
+        {
+            Elf16_Half opdesc = Addressing_Mode::RegDir;
+            string reg = match.str(1);
+            if (reg[0] == 'r') opdesc |= (reg[1] - '0') << 1;
+            else if (reg == "sp") opdesc |= 6 << 1;
+            else if (reg == "pc") opdesc |= 7 << 1;
+            else
+            {
+                cerr << "ERROR: Invalid register: \"" << reg << "\"!\n";
+                return false;
+            }
+            section_map.at(cur_sect.name).push_back(opdesc);
+            cur_sect.loc_cnt++;
+            return true;
+        }
+    }
+    if (regex_match(operand, match, regex_regind))
+    {
+        Elf16_Half opdesc = Addressing_Mode::RegInd;
+        string reg = match.str(1);
+        if (reg[0] == 'r') opdesc |= (reg[1] - '0') << 1;
+        else if (reg == "sp") opdesc |= 6 << 1;
+        else if (reg == "pc") opdesc |= 7 << 1;
+        else
+        {
+            cerr << "ERROR: Invalid register: \"" << reg << "\"!\n";
+            return false;
+        }
+        section_map.at(cur_sect.name).push_back(opdesc);
+        cur_sect.loc_cnt++;
+        return true;
+    }
+    else if (regex_match(operand, match, regex_regindoff))
+    {
+        Elf16_Half opdesc = 0;
+        string reg = match.str(1), value = match.str(2);
+        if (reg[0] == 'r') opdesc |= (reg[1] - '0') << 1;
+        else if (reg == "sp") opdesc |= 6 << 1;
+        else if (reg == "pc") opdesc |= 7 << 1;
+        else
+        {
+            cerr << "ERROR: Invalid register: \"" << reg << "\"!\n";
+            return false;
+        }
+        Elf16_Half byteoff;
+        Elf16_Word wordoff;
+        if (decode_byte(value, byteoff))
+        {
+            if (byteoff == 0)
+            {
+                opdesc |= Addressing_Mode::RegInd; // zero-offset = regind without offset
+                section_map.at(cur_sect.name).push_back(opdesc);
+                cur_sect.loc_cnt++;
+            }
+            else
+            {
+                opdesc |= Addressing_Mode::RegIndOff8; // 8-bit offset
+                section_map.at(cur_sect.name).push_back(opdesc);
+                section_map.at(cur_sect.name).push_back(byteoff);
+                cur_sect.loc_cnt += 2;
+            }
+        }
+        else if (decode_word(value, wordoff))
+        {
+            opdesc |= Addressing_Mode::RegIndOff16; // 16-bit offset
+            section_map.at(cur_sect.name).push_back(opdesc);
+            section_map.at(cur_sect.name).push_back(wordoff & 0x00ff); // little-endian
+            section_map.at(cur_sect.name).push_back(wordoff >> 8);
+            cur_sect.loc_cnt += 3;
+        }
+        else
+        {
+            cerr << "ERROR: Failed to decode: \"" << match.str(1) << "\" as a byte or word value!\n";
+            return false;
+        }
+        return true;
+    }
+    else if (regex_match(operand, match, regex_regindsym))
+    {
+        Elf16_Half opdesc = Addressing_Mode::RegIndOff16;
+        string reg = match.str(1);
+        if (reg[0] == 'r') opdesc |= (reg[1] - '0') << 1;
+        else if (reg == "sp") opdesc |= 6 << 1;
+        else if (reg == "pc") opdesc |= 7 << 1;
+        else
+        {
+            cerr << "ERROR: Invalid register: \"" << reg << "\"!\n";
+            return false;
+        }
+        section_map.at(cur_sect.name).push_back(opdesc);
+        cur_sect.loc_cnt++;
+        if (add_reloc(match.str(2), R_VN_16, next_instr))
+            return true;
+    }
+    else if (regex_match(operand, match, regex_memsym))
+    {
+        bool pcrel = match.str(1)[0] == '$';
+        if (pcrel) section_map.at(cur_sect.name).push_back(Addressing_Mode::RegIndOff16 | 7 << 1);
+        else section_map.at(cur_sect.name).push_back(Addressing_Mode::Mem);
+        cur_sect.loc_cnt++;
+        if (add_reloc(match.str(2), pcrel ? R_VN_PC16 : R_VN_16, next_instr))
+            return true;
+    }
+    else if (regex_match(operand, match, regex_memabs))
+    {
+        Elf16_Word address;
+        if (!decode_word(match.str(1), address))
+        {
+            cerr << "ERROR: Invalid address: \"" << match.str(1) << "\"!\n";
+            return false;
+        }
+        section_map.at(cur_sect.name).push_back(Addressing_Mode::Mem);
+        section_map.at(cur_sect.name).push_back(address & 0x00ff); // little-endian
+        section_map.at(cur_sect.name).push_back(address >> 8);
+        cur_sect.loc_cnt += 3;
+        return true;
+    }
+    cerr << "ERROR: Invalid operand: \"" << operand << "\"!\n";
+    return false;
+}
+
+
+bool Assembler::add_reloc(const std::string symbol, Elf16_Half type, Elf16_Addr next_instr)
+{
+    if (symtab_map.count(symbol) == 0)
+    {
+        cerr << "ERROR: Undefined reference to: \"" << symbol << "\"!\n";
+        return false;
+    }
+    Symtab_Entry entry = symtab_map.at(symbol);
+    Elf16_Word value;
+    if (entry.sym.st_shndx == SHN_ABS)
+    {
+        if (type == R_VN_16) value = entry.sym.st_value;
+        else
+        {
+            cerr << "ERROR: Symbol: \"" << symbol << "\" is an absolute symbol and cannot be used for memory addressing!\n";
+            return false;
+        }
+    }
+    else
+    {
+        string relshdr = ".rel" + cur_sect.name;
+        add_shdr(relshdr, SHT_REL, SHF_INFO_LINK, true, shdrtab_map.at(cur_sect.name).index, sizeof(Elf16_Rel));
+        bool global = ELF16_ST_BIND(entry.sym.st_info) == STB_GLOBAL;
+        reltab_map[cur_sect.name].push_back(Reltab_Entry(ELF16_R_INFO(global ? entry.index : symtab_map.at(shstrtab_vect[entry.sym.st_shndx]).index, type), cur_sect.loc_cnt + 1));
+        shdrtab_map.at(relshdr).shdr.sh_size += sizeof(Elf16_Rel);
+        value = global ? 0 : entry.sym.st_value;
+        if (type == R_VN_PC16) value += cur_sect.loc_cnt + 1 - next_instr;
+    }
+    section_map.at(cur_sect.name).push_back(value & 0x00ff); // little-endian
+    section_map.at(cur_sect.name).push_back(value >> 8);
+    cur_sect.loc_cnt += 2;
+    return true;
 }
