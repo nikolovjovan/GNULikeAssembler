@@ -1,7 +1,5 @@
 #include "parser.h"
 
-#include <vector>
-
 using std::string;
 using std::vector;
 
@@ -61,8 +59,8 @@ Parser::Parser(Lexer *lexer)
     for (uint8_t i = 0; i < INSTR_CNT; ++i)
         instr_map[instr_str[i]] = i;
     // Initializing pseudo-instructions map
-    pseudo_map[pseudo_str[0]] = 17; // pushf
-    pseudo_map[pseudo_str[1]] = 18; // popf
+    pseudo_map[pseudo_str[0]] = Instruction::Push; // pushf
+    pseudo_map[pseudo_str[1]] = Instruction::Pop; // popf
 }
 
 string Parser::get_directive(uint8_t code) const
@@ -77,7 +75,7 @@ string Parser::get_instruction(uint8_t code) const
     return instr_str[code];
 }
 
-bool Parser::parse_line(const std::string &str, Line &result)
+bool Parser::parse_line(const string &str, Line &result)
 {
     result.label = "";
     result.content_type = Content_Type::None;
@@ -104,7 +102,7 @@ bool Parser::parse_line(const std::string &str, Line &result)
     return false; // invalid content
 }
 
-bool Parser::parse_directive(const std::string &str, Directive &result)
+bool Parser::parse_directive(const string &str, Directive &result)
 {
     result.code = -1;
     result.p1 = "";
@@ -123,7 +121,7 @@ bool Parser::parse_directive(const std::string &str, Directive &result)
     return true;
 }
 
-bool Parser::parse_instruction(const std::string &str, Instruction &result)
+bool Parser::parse_instruction(const string &str, Instruction &result)
 {
     result.code = -1;
     result.op_cnt = 0;
@@ -144,8 +142,8 @@ bool Parser::parse_instruction(const std::string &str, Instruction &result)
         result.code = pseudo_map[mnem];
         switch (result.code)
         {
-        case Instruction_Code::Push:
-        case Instruction_Code::Pop:
+        case Instruction::Push:
+        case Instruction::Pop:
             result.op_cnt = 1;
             result.op_size = Operand_Size::Word;
             result.op1 = "psw"; // pushf and popf have a single operand - psw
@@ -222,6 +220,16 @@ bool Parser::decode_word(const string &str, uint16_t &word)
         return true;
     }
     return false;
+}
+
+bool Parser::decode_register(const string &str, uint8_t &regdesc)
+{
+    regdesc = 0;
+    if (str[0] == 'r') regdesc |= (str[1] - '0') << 1;
+    else if (str == "sp") regdesc |= 6 << 1;
+    else if (str == "pc") regdesc |= 7 << 1;
+    else return false;
+    return true;
 }
 
 uint8_t Parser::get_operand_size(const string &str)

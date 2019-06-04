@@ -11,39 +11,44 @@
 #define PSEUDO_CNT 2
 
 struct Content_Type { enum { None = 0, Directive, Instruction }; };
-struct Directive_Code { enum { Global = 0, Extern, Equ, Set, Text, Data, Bss, Section, End, Byte, Word, Align, Skip }; };
-struct Instruction_Code { enum { Nop = 0, Halt, Xchg, Int, Mov, Add, Sub, Mul, Div, Cmp, Not, And, Or, Xor, Test, Shl, Shr, Push, Pop, Jmp, Jeq, Jne, Jgt, Call, Ret, Iret }; };
 struct Operand_Size { enum { None = 0, Byte, Word }; };
+struct Addressing_Mode { enum { Imm = 0, RegDir, RegInd, RegIndOff8, RegIndOff16, Mem }; };
 
 typedef struct Directive
 {
+    enum { Global = 0, Extern, Equ, Set, Text, Data, Bss, Section, End, Byte, Word, Align, Skip };
+
     uint8_t code;
     std::string p1, p2, p3;
-    Directive() {}
-    Directive(const Directive &dir)
-    {
-        code = dir.code;
-        p1 = std::string(dir.p1);
-        p2 = std::string(dir.p2);
-        p3 = std::string(dir.p3);
-    }
+
+    // Directive() {}
+    // Directive(const Directive &dir)
+    // {
+    //     code = dir.code;
+    //     p1 = dir.p1;
+    //     p2 = dir.p2;
+    //     p3 = dir.p3;
+    // }
 } Directive;
 
 typedef struct Instruction
 {
+    enum { Nop = 0, Halt, Xchg, Int, Mov, Add, Sub, Mul, Div, Cmp, Not, And, Or, Xor, Test, Shl, Shr, Push, Pop, Jmp, Jeq, Jne, Jgt, Call, Ret, Iret };
+
     uint8_t code;
     uint8_t op_size;
     uint8_t op_cnt;
     std::string op1, op2;
-    Instruction() {}
-    Instruction(const Instruction &instr)
-    {
-        code = instr.code;
-        op_size = instr.op_size;
-        op_cnt = instr.op_cnt;
-        op1 = std::string(instr.op1);
-        op2 = std::string(instr.op2);
-    }
+
+    // Instruction() {}
+    // Instruction(const Instruction &instr)
+    // {
+    //     code = instr.code;
+    //     op_size = instr.op_size;
+    //     op_cnt = instr.op_cnt;
+    //     op1 = instr.op1;
+    //     op2 = instr.op2;
+    // }
 } Instruction;
 
 class Parser;
@@ -85,6 +90,7 @@ public:
 
     bool decode_byte(const std::string &str, uint8_t &result);
     bool decode_word(const std::string &str, uint16_t &result);
+    bool decode_register(const std::string &str, uint8_t &regdesc);
 
     uint8_t get_operand_size(const std::string &str);
 private:
