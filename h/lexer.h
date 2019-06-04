@@ -1,9 +1,10 @@
 #ifndef _LEXER_H
 #define _LEXER_H
 
-#include <vector>
-#include <string>
+#include <list>
 #include <regex>
+#include <string>
+#include <vector>
 
 // *** Regex strings that match specific tokens ***
 
@@ -60,44 +61,65 @@
 
 struct Content_Match { enum { Directive, ZeroAddr, OneAddr, TwoAddr }; };
 
+typedef std::vector<std::string> tokens_t;
+
 class Lexer
 {
 public:
     Lexer();
     ~Lexer() {};
 
-    bool tokenize_line(const std::string &, std::vector<std::string> &);
-    bool tokenize_content(const std::string &, std::vector<std::string> &);
+    static std::string tolower(const std::string &str);
 
+    bool is_empty(const std::string &str);
+    std::list<std::string> split_string(const std::string &str);
+
+    bool tokenize_line(const std::string &str, tokens_t &tokens);
+    bool tokenize_directive(const std::string &str, tokens_t &tokens);
+    bool tokenize_zeroaddr(const std::string &str, tokens_t &tokens);
+    bool tokenize_oneaddr(const std::string &str, tokens_t &tokens);
+    bool tokenize_twoaddr(const std::string &str, tokens_t &tokens);
+
+    bool match_byte(const std::string &str, std::string &result);
+    bool match_word(const std::string &str, std::string &result);
+
+    bool match_byte_operand(const std::string &str);
+    bool match_word_operand(const std::string &str, std::string &offset);
 private:
-    std::regex line_regex;
-    const std::string line_string = REGEX_START "(?:(" REGEX_SYM "):)?\\s*(?:(" REGEX_CONTENT "))?" REGEX_END;
+    static std::list<std::string> tokenize_string(const std::string &str, const std::regex &regex);
+    static bool tokenize_content(const std::string &str, const std::regex &regex, tokens_t &tokens, bool ignore_second = false);
 
-    std::regex regex_split, regex_symbol, regex_byte, regex_word, regex_op1b, regex_op2b,
-        regex_imm_b, regex_imm_w, regex_regdir_b, regex_regdir_w, regex_regind,
-        regex_regindoff, regex_regindsym, regex_memsym, regex_memabs;
+    std::regex empty_rx;
+    const std::string empty_str = REGEX_START REGEX_END;
 
-    const std::string regex_split_string = "\\s*,",
-                      regex_symbol_string = "\\s*(" REGEX_SYM ")\\s*",
-                      regex_byte_string = "\\s*(" REGEX_VAL_B ")\\s*",
-                      regex_word_string = "\\s*(" REGEX_VAL_W ")\\s*",
-                      regex_op1b_string = "\\s*(" REGEX_ADR_REGDIR_B "|" REGEX_ADR_REGDIR_W "|\\[\\s*(?:" REGEX_ADR_REGDIR_W ")\\s*\\])\\s*",
-                      regex_op2b_string = "\\s*(?:(" REGEX_ADR_IMM_B ")|(?:" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_ADR_IMM_B ")\\s*\\])\\s*";
+    std::regex line_rx;
+    const std::string line_str = REGEX_START "(?:(" REGEX_SYM "):)?\\s*(" REGEX_CONTENT ")?" REGEX_END;
 
-    const std::string content_strings[CONTENT_CNT] = {
-        REGEX_START // Directives
+    std::regex directive_rx;
+    const std::string directive_str = {
+        REGEX_START
         "\\.(?:"
-        "(section)\\s+(" REGEX_SYM ")\\s*(?:,\\s*\"(a?e?w?x?)\")?|" // flags: a-allocatable, e-excluded from executable and shared library (bss), w-writable, x-executable
+        // flags: a-allocatable, e-excluded from executable and shared library (bss), w-writable, x-executable
+        "(section)\\s+(" REGEX_SYM ")\\s*(?:,\\s*\"(a?e?w?x?)\")?|"
         "(text|data|bss|end)|"
         "(global|extern|byte|word)\\s+(" REGEX_CONTENT ")|"
         "(equ|set)\\s+(" REGEX_SYM "),\\s*(" REGEX_CONTENT ")|"
         "(align)\\s+(" REGEX_VAL_B ")\\s*(?:,\\s*(" REGEX_VAL_B "))?\\s*(?:,\\s*(" REGEX_VAL_B "))?|"
         "(skip)\\s+(" REGEX_VAL_W ")\\s*(?:,\\s*(" REGEX_VAL_B "))?|"
-        ")" REGEX_END, // Directives
+        ")"
+        REGEX_END
+    };
 
-        REGEX_START "(nop|halt|ret|iret)" REGEX_END, // 0-address instructions
+    std::regex zeroaddr_rx;
+    const std::string zeroaddr_str = {
+        REGEX_START
+        "(nop|halt|ret|iret)"
+        REGEX_END
+    };
 
-        REGEX_START // 1-address instructions
+    std::regex oneaddr_rx;
+    const std::string oneaddr_str = {
+        REGEX_START
         "(?:"
         "(int)()\\s+(" REGEX_ADR_IMM_B ")|"
 
@@ -113,9 +135,13 @@ private:
         "(pop)(w?)\\s+(" REGEX_ADR_REGMEM_W ")|"
 
         "(jmp|jeq|jne|jgt|call)()\\s+(" REGEX_ADR_MEM ")"
-        ")" REGEX_END,
+        ")"
+        REGEX_END
+    };
 
-        REGEX_START // 2-address instructions
+    std::regex twoaddr_rx;
+    const std::string twoaddr_str = {
+        REGEX_START
         "(?:"
         "(xchg)(b)\\s+(" REGEX_ADR_REGMEM_B ")\\s*,\\s*(" REGEX_ADR_REGDIR_B ")|"
         "(xchg)(b)\\s+(" REGEX_ADR_REGDIR_B ")\\s*,\\s*(" REGEX_ADR_REGMEM_B ")|"
@@ -129,8 +155,31 @@ private:
 
         "(shl|shr)(b)\\s+(" REGEX_ADR_REGMEM_B ")\\s*,\\s*(" REGEX_ADR_IMMREG_B ")|"
         "(shl|shr)(w?)\\s+(" REGEX_ADR_REGMEM_W ")\\s*,\\s*(" REGEX_ADR_IMMREG_W ")"
-        ")" REGEX_END // Instructions
+        ")"
+        REGEX_END
     };
+
+    std::regex split_rx;
+    const std::string split_str = "\\s*,";
+
+    std::regex symbol_rx;
+    const std::string symbol_str = "\\s*(" REGEX_SYM ")\\s*";
+
+    std::regex byte_rx;
+    const std::string byte_str = "\\s*(" REGEX_VAL_B ")\\s*";
+
+    std::regex word_rx;
+    const std::string word_str = "\\s*(" REGEX_VAL_W ")\\s*";
+
+    std::regex byte_operand_rx;
+    const std::string byte_operand_str = "\\s*(" REGEX_ADR_REGDIR_B "|" REGEX_ADR_REGDIR_W "|\\[\\s*(?:" REGEX_ADR_REGDIR_W ")\\s*\\])\\s*";
+
+    std::regex word_operand_rx;
+    const std::string word_operand_str = "\\s*(?:(" REGEX_ADR_IMM_B ")|(?:" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_ADR_IMM_B ")\\s*\\])\\s*";
+
+    // TODO: Implement these in some shape or form
+    std::regex regex_imm_b, regex_imm_w, regex_regdir_b, regex_regdir_w, regex_regind,
+        regex_regindoff, regex_regindsym, regex_memsym, regex_memabs;
 };
 
 #endif // lexer.h

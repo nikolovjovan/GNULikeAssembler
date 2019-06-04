@@ -2,7 +2,7 @@
 #include <fstream>
 #include <string>
 
-#include "asm.h"
+#include "assembler.h"
 
 using std::cerr;
 using std::cout;
