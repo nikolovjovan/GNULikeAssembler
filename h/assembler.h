@@ -96,8 +96,8 @@ typedef struct Reltab_Entry
     }
 } Reltab_Entry;
 
-typedef std::pair<const std::string, Symtab_Entry>  Symtab_Pair;
-typedef std::pair<const std::string, Shdrtab_Entry> Shdrtab_Pair;
+typedef std::pair<const std::string, Symtab_Entry>  symtab_pair_t;
+typedef std::pair<const std::string, Shdrtab_Entry> shdrtab_pair_t;
 
 class Assembler
 {
@@ -117,6 +117,8 @@ private:
     Parser  *parser;
     Pass    pass;
 
+    Elf16_Ehdr elf_header;
+
     Section_Info cur_sect;
 
     std::map<std::string, Elf16_Addr>                   lc_map;
@@ -128,23 +130,28 @@ private:
     std::vector<Line_Info>      file_vect;
     std::vector<std::string>    strtab_vect;
     std::vector<std::string>    shstrtab_vect;
-    std::vector<Symtab_Entry>   symtab_vect;
+    std::vector<Elf16_Sym>      symtab_vect;
+    std::vector<Elf16_Shdr>     shdrtab_vect;
 
     bool run_first_pass();
     bool run_second_pass();
 
-    void write_output();
     void print_line(Line_Info &info);
+    void print_file(std::ostream &out);
+
+    void finalize();
+    void write_output();
 
     Result process_line(Line_Info &info);
     Result process_directive(const Directive &dir);
     Result process_instruction(const Instruction &instr);
+    Result process_expression(const Expression &expr, bool reloc);
 
     bool add_symbol(const std::string &symbol);
     bool add_shdr(const std::string &name, Elf16_Word type, Elf16_Word flags, bool reloc = false, Elf16_Word info = 0, Elf16_Word entsize = 0);
 
     bool insert_operand(const std::string &str, uint8_t size, Elf16_Addr next_instr);
-    bool add_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr);
+    bool add_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr = 0);
 };
 
 #endif  // assembler.h

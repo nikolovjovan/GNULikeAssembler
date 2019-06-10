@@ -200,6 +200,12 @@ bool Lexer::tokenize_twoaddr(const string &str, tokens_t &tokens)
     return Lexer::tokenize_content(str, twoaddr_rx, tokens, true);
 }
 
+bool Lexer::tokenize_expression(const string &str, tokens_t &tokens)
+{
+    // work on this...
+    return Lexer::tokenize_content(str, expr_rx, tokens, false);
+}
+
 list<string> Lexer::tokenize_string(const string &str, const regex &regex)
 {
     list<string> tokens;

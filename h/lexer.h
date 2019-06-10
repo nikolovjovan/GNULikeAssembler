@@ -11,7 +11,7 @@
 // Line START: matches all whitespace BEFORE any valid symbols
 #define REGEX_START "^\\s*"
 // Line END: matches all whitespace AFTER valid symbols and comments
-#define REGEX_END "\\s*(?:#.*)?$"
+#define REGEX_END "\\s*(?:[@#;(?://)].*)?\r?$"
 
 // Valid symbol format: starts with '.' or '_' or 'a-z' then can also contain digits
 #define REGEX_SYM "[._a-z][.\\w]*"
@@ -23,7 +23,7 @@
 #define REGEX_VAL_W "[-~]?(?:0b[0-1]{1,16}|0[0-7]{1,6}|0|[1-9]\\d{0,4}|0x[\\da-f]{1,4})"
 
 // Valid content format: anything until a comment
-#define REGEX_CONTENT "[^#]*?"
+#define REGEX_CONTENT "[^@#;(?://)]*?"
 
 // *** Immediate addressing modes ***
 // <val> (immediate value embedded inside the instruction)
@@ -93,6 +93,7 @@ public:
     bool tokenize_zeroaddr(const std::string &str, tokens_t &tokens);
     bool tokenize_oneaddr(const std::string &str, tokens_t &tokens);
     bool tokenize_twoaddr(const std::string &str, tokens_t &tokens);
+    bool tokenize_expression(const std::string &str, tokens_t &tokens);
 private:
     static std::list<std::string> tokenize_string(const std::string &str, const std::regex &regex);
     static bool tokenize_content(const std::string &str, const std::regex &regex, tokens_t &tokens, bool ignore_second = false);
@@ -102,7 +103,7 @@ private:
         byte_operand_rx, word_operand_rx,
         imm_b_rx, imm_w_rx, regdir_b_rx, regdir_w_rx,
         regind_rx, regindoff_rx, regindsym_rx, memsym_rx, memabs_rx,
-        directive_rx, zeroaddr_rx, oneaddr_rx, twoaddr_rx;
+        directive_rx, zeroaddr_rx, oneaddr_rx, twoaddr_rx, expr_rx;
 
     const std::string
         empty_str = REGEX_START REGEX_END,

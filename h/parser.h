@@ -3,8 +3,9 @@
 
 #include "lexer.h"
 
-#include <string>
 #include <map>
+#include <string>
+#include <vector>
 
 #define DIR_CNT 13
 #define INSTR_CNT 26
@@ -16,39 +17,60 @@ struct Operand_Size { enum { None = 0, Byte, Word }; };
 typedef struct Directive
 {
     enum { Global = 0, Extern, Equ, Set, Text, Data, Bss, Section, End, Byte, Word, Align, Skip };
-
     uint8_t code;
     std::string p1, p2, p3;
-
-    // Directive() {}
-    // Directive(const Directive &dir)
-    // {
-    //     code = dir.code;
-    //     p1 = dir.p1;
-    //     p2 = dir.p2;
-    //     p3 = dir.p3;
-    // }
 } Directive;
 
 typedef struct Instruction
 {
     enum { Nop = 0, Halt, Xchg, Int, Mov, Add, Sub, Mul, Div, Cmp, Not, And, Or, Xor, Test, Shl, Shr, Push, Pop, Jmp, Jeq, Jne, Jgt, Call, Ret, Iret };
-
     uint8_t code;
     uint8_t op_size;
     uint8_t op_cnt;
     std::string op1, op2;
-
-    // Instruction() {}
-    // Instruction(const Instruction &instr)
-    // {
-    //     code = instr.code;
-    //     op_size = instr.op_size;
-    //     op_cnt = instr.op_cnt;
-    //     op1 = instr.op1;
-    //     op2 = instr.op2;
-    // }
 } Instruction;
+
+class Expression_Token
+{
+public:
+    enum Token_Type { OpenBracket, CloseBracket, Plus, Minus, Multiply, Divide, Number, Symbol };
+    Token_Type type;
+};
+
+class Operator_Token : Expression_Token
+{
+public:
+    unsigned calculate(unsigned a, unsigned b)
+    {
+        switch (type)
+        {
+        case Plus:
+            return a + b;
+        case Minus:
+            return a - b;
+        case Multiply:
+            return a * b;
+        case Divide:
+            return a / b;
+        default:
+            return 0;
+        };
+    }
+};
+
+class Number_Token : Expression_Token
+{
+public:
+    unsigned value;
+};
+
+class Symbol_Token : Expression_Token
+{
+public:
+    std::string name;
+};
+
+typedef std::vector<Expression_Token> Expression;
 
 class Parser;
 
@@ -86,6 +108,7 @@ public:
     bool parse_line(const std::string &str, Line &result);
     bool parse_directive(const std::string &str, Directive &result);
     bool parse_instruction(const std::string &str, Instruction &result);
+    bool parse_expression(const std::string &str, Expression &result);
 
     bool decode_byte(const std::string &str, uint8_t &result);
     bool decode_word(const std::string &str, uint16_t &result);

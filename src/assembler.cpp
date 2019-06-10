@@ -1,13 +1,23 @@
 #include "assembler.h"
 
 #include <iostream>
+#include <iomanip>
 
 using std::cerr;
 using std::cout;
+using std::dec;
+using std::hex;
 using std::ifstream;
 using std::ios;
-using std::make_pair;
+using std::left;
+using std::map;
+using std::ostream;
+using std::pair;
+using std::right;
+using std::setfill;
+using std::setw;
 using std::string;
+using std::vector;
 
 Elf16_Addr Symtab_Entry::symtab_index   = 0;
 Elf16_Addr Shdrtab_Entry::shdrtab_index = 0;
@@ -31,13 +41,13 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
 
     // Inserting a dummy symbol
     Symtab_Entry dummySym(0, 0, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_UNDEF);
-    symtab_map.insert(Symtab_Pair("", dummySym));
-    symtab_vect.push_back(dummySym);
+    symtab_map.insert(symtab_pair_t("", dummySym));
+    symtab_vect.push_back(dummySym.sym);
     strtab_vect.push_back("");
 
     // Inserting a dummy section header
     Shdrtab_Entry dummyShdr(SHT_NULL, 0, 0);
-    shdrtab_map.insert(Shdrtab_Pair("", dummyShdr));
+    shdrtab_map.insert(shdrtab_pair_t("", dummyShdr));
     shstrtab_vect.push_back("");
 }
 
@@ -64,7 +74,6 @@ bool Assembler::assemble()
     cur_sect.flags = 0;
     cur_sect.shdrtab_index = 0;
     cur_sect.loc_cnt = 0;
-
     lc_map.clear();
 
     if (!run_second_pass())
@@ -73,21 +82,7 @@ bool Assembler::assemble()
         return false;
     }
 
-    cout << "lc_map:\n";
-    for (auto it = lc_map.begin(); it != lc_map.end(); ++it)
-        cout << "Section name:\t" << it->first << "\tLocation counter:\t" << it->second << '\n';
-
-    cout << "symtab_map:\n";
-    for (auto it = symtab_map.begin(); it != symtab_map.end(); ++it)
-        cout << it->first << "\t->" << it->second.index << "\t= "
-             << it->second.sym.st_name << ':' << (int)it->second.sym.st_value << ':'
-             << it->second.sym.st_size << ':' << ELF16_ST_BIND(it->second.sym.st_info)
-             << ':' << ELF16_ST_TYPE(it->second.sym.st_info) << ':' << it->second.sym.st_shndx << '\n';
-
-    cout << "shdrtab_map:\n";
-    for (auto it = shdrtab_map.begin(); it != shdrtab_map.end(); ++it)
-        cout << "Section name:" << it->first << "\t\tIndex:\t" << it->second.index << "\tSection type:\t" << it->second.shdr.sh_type << "\tSection flags:\t" << it->second.shdr.sh_flags << "\tSection size:\t" << it->second.shdr.sh_size << "\tSection info:\t" << it->second.shdr.sh_info << "\tLink:\t" << it->second.shdr.sh_link << '\n';
-
+    finalize();
     write_output();
 
     return true;
@@ -161,41 +156,6 @@ bool Assembler::run_second_pass()
     return res;
 }
 
-void Assembler::write_output()
-{
-    if (output.is_open())
-        output.close();
-    // THIS NEEDS TO BE SET BEFORE WRITING TO OUTPUT FILE!!!
-    // shdrtab_map.at(relshdr).shdr.sh_link    = shdrtab_map.at(".strtab").index;
-    if (binary)
-    {
-        output.open(output_file, ios::out | ios::binary);
-        // not implemented yet
-    }
-    else
-    {
-        output.open(output_file, ifstream::out);
-
-        // temporary
-        for (auto it = section_map.begin(); it != section_map.end(); ++it)
-        {
-            output << "Section: " << it->first << '\n';
-            if (it->first == ".text")
-                for (unsigned i = 0; i < it->second.size(); ++i)
-                {
-                    Elf16_Half byte = it->second[i];
-                    for (unsigned j = 0; j < 8; ++j)
-                        output << (bool) (byte & (0x80 >> j));
-                    output << (i % 4 ? ' ' : '\n');
-                }
-            else
-                for (unsigned i = 0; i < it->second.size(); ++i)
-                    output << (unsigned) (it->second[i]) << ' ';
-            output << '\n';
-        }
-    }
-}
-
 void Assembler::print_line(Line_Info &info)
 {
     cout << info.line_num << ":\t";
@@ -226,6 +186,246 @@ void Assembler::print_line(Line_Info &info)
             if (info.line.getInstr().op_cnt > 1)
                 cout << ", " << info.line.getInstr().op2;
         }
+    }
+}
+
+void Assembler::print_file(ostream &out)
+{
+    // Output ELF Header
+    out << "ELF Header:\n";
+    out << "  Magic:   ";
+    for (unsigned i = 0; i < EI_NIDENT; ++i)
+        out << hex << (unsigned) elf_header.e_ident[i] << (i < EI_NIDENT - 1 ? ' ' : '\n');
+    out << "  Class:                             " << (elf_header.e_ident[EI_CLASS] == ELFCLASS16 ? "ELF16" : "unknown") << '\n';
+    out << "  Data:                              " << (elf_header.e_ident[EI_DATA] == ELFDATA2LSB ? "2's complement, little endian" : "unknown") << '\n';
+    out << "  Version:                           " << (elf_header.e_ident[EI_CLASS] == EV_CURRENT ? "1 (current)" : "unknown") << '\n';
+    out << "  Type:                              ";
+    switch (elf_header.e_type)
+    {
+    case ET_REL: out << "REL (Relocatable file)"; break;
+    case ET_EXEC: out << "EXEC (Executable file"; break;
+    case ET_DYN: out << "DYN (Shared object file)"; break;
+    default: out << "unknown";
+    }
+    out << '\n';
+    out << "  Machine:                           " << (elf_header.e_machine == EM_VN16 ? "Von-Neumann 16-bit" : "unknown") << '\n';
+    out << "  Version:                           " << hex << (unsigned) elf_header.e_version << '\n';
+    out << "  Entry point address:               " << hex << (unsigned) elf_header.e_entry << '\n';
+    out << "  Start of program headers:          " << dec << (unsigned) elf_header.e_phoff << " (bytes into file)\n";
+    out << "  Start of section headers:          " << dec << (unsigned) elf_header.e_shoff << " (bytes into file)\n";
+    out << "  Flags:                             " << hex << (unsigned) elf_header.e_flags << '\n';
+    out << "  Size of this header:               " << dec << (unsigned) elf_header.e_ehsize << " (bytes)\n";
+    out << "  Size of program headers:           " << dec << (unsigned) elf_header.e_phentsize << " (bytes)\n";
+    out << "  Number of program headers:         " << dec << (unsigned) elf_header.e_phnum << '\n';
+    out << "  Size of section headers:           " << dec << (unsigned) elf_header.e_shentsize << " (bytes)\n";
+    out << "  Number of section headers:         " << dec << (unsigned) elf_header.e_shnum << '\n';
+    out << "  Section header string table index: " << dec << (unsigned) elf_header.e_shstrndx << '\n';
+
+    out << '\n';
+    out << "Section Headers:\n";
+    out << "  [Nr] Name                 Type                 Address   Offset\n";
+    out << "       Size      EntSize    Flags  Link   Info   Align\n";
+
+    string flags;
+    for (unsigned i = 0; i < shdrtab_vect.size(); ++i)
+    {
+        out << "  [" << dec << setw(2) << setfill(' ') << right << i << "] ";
+        out << setw(20) << setfill(' ') << left << shstrtab_vect[shdrtab_vect[i].sh_name] << ' ';
+        out << setw(20) << setfill(' ') << left;
+        switch (shdrtab_vect[i].sh_type)
+        {
+        case SHT_NULL: out << "NULL"; break;
+        case SHT_PROGBITS: out << "PROGBITS"; break;
+        case SHT_SYMTAB: out << "SYMTAB"; break;
+        case SHT_STRTAB: out << "STRTAB"; break;
+        case SHT_NOBITS: out << "NOBITS"; break;
+        case SHT_REL: out << "REL"; break;
+        default: out << "UNKNOWN"; break;
+        }
+        out << ' ';
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_addr << "      ";
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_offset << "\n       ";
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_size << "      ";
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_entsize << "       ";
+        flags.clear();
+        if (shdrtab_vect[i].sh_flags & SHF_WRITE) flags.push_back('W');
+        if (shdrtab_vect[i].sh_flags & SHF_ALLOC) flags.push_back('A');
+        if (shdrtab_vect[i].sh_flags & SHF_EXECINSTR) flags.push_back('X');
+        if (shdrtab_vect[i].sh_flags & SHF_INFO_LINK) flags.push_back('I');
+        out << setw(7) << setfill(' ') << left << flags;
+        out << setw(7) << setfill(' ') << left << dec << (unsigned) shdrtab_vect[i].sh_link;
+        out << setw(7) << setfill(' ') << left << dec << (unsigned) shdrtab_vect[i].sh_info;
+        out << left << dec << (shdrtab_vect[i].sh_addralign == 0 ? 1 : 2 << shdrtab_vect[i].sh_addralign - 1) << '\n';
+    }
+    out << "Key to Flags:\n  W (write), A (alloc), X (execute), I (info)\n";
+
+    for (auto it = shdrtab_vect.begin(); it != shdrtab_vect.end(); ++it)
+    {
+        string name = shstrtab_vect[it->sh_name];
+        switch (it->sh_type)
+        {
+        case SHT_NULL: break;   // Only section header, no data
+        case SHT_PROGBITS:
+        {
+            vector<Elf16_Half> &data = section_map[name];
+            out << "\nContents of section '" << name << "':\n";
+            for (unsigned i = 0; i < data.size(); ++i)
+                out << setw(2) << setfill('0') << right << hex << (unsigned) data[i]
+                    << (((i + 1) % 20 && (i + 1) < data.size()) ? ' ' : '\n');
+        }
+        case SHT_SYMTAB:
+        {
+            if (name != ".symtab") break;
+            out << "\nSymbol table '.symtab' contains " << symtab_vect.size() << " entries:\n"
+                << "  Num: Value  Size   Type       Bind       Ndx  Name\n";
+            for (unsigned i = 0; i < symtab_vect.size(); ++i)
+            {
+                out << setw(5) << setfill(' ') << right << i << ": ";
+                out << setw(4) << setfill('0') << right << hex << (unsigned) symtab_vect[i].st_value << "   ";
+                out << setw(7) << setfill(' ') << left << dec << (unsigned) symtab_vect[i].st_size;
+                out << setw(11) << setfill(' ') << left;
+                switch (ELF16_ST_TYPE(symtab_vect[i].st_info))
+                {
+                case STT_NOTYPE: out << "NOTYPE"; break;
+                case STT_OBJECT: out << "OBJECT"; break;
+                case STT_FUNC: out << "FUNC"; break;
+                case STT_SECTION: out << "SECTION"; break;
+                case STT_FILE: out << "FILE"; break;
+                default: out << "unknown"; break;
+                }
+                out << setw(11) << setfill(' ') << left;
+                switch (ELF16_ST_BIND(symtab_vect[i].st_info))
+                {
+                case STB_LOCAL: out << "LOCAL"; break;
+                case STB_GLOBAL: out << "GLOBAL"; break;
+                case STB_WEAK: out << "WEAK"; break;
+                default: out << "unknown"; break;
+                }
+                out << setw(5) << setfill(' ') << left << dec;
+                if (symtab_vect[i].st_shndx == SHN_UNDEF)
+                    out << "UND";
+                else
+                    out << (unsigned) symtab_vect[i].st_shndx;
+                out << strtab_vect[symtab_vect[i].st_name];
+                out << '\n';
+            }
+            break;
+        }
+        case SHT_STRTAB:
+        {
+            if (name == ".strtab")
+            {
+                out << "\nString table '.strtab' contains " << strtab_vect.size() << " entries:\n";
+                for (unsigned i = 0, offset = it->sh_offset; i < strtab_vect.size(); offset += (strtab_vect[i++].length() + 1))
+                    out << "  " << setw(4) << setfill('0') << right << hex << offset << ": " << strtab_vect[i] << '\n';
+            }
+            else if (name == ".shstrtab")
+            {
+                out << "\nString table '.shstrtab' contains " << shstrtab_vect.size() << " entries:\n";
+                for (unsigned i = 0, offset = it->sh_offset; i < shstrtab_vect.size(); offset += (shstrtab_vect[i++].length() + 1))
+                    out << "  " << setw(4) << setfill('0') << right << hex << offset << ": " << shstrtab_vect[i] << '\n';
+            }
+            break;
+        }
+        case SHT_NOBITS: break; // Only section header, uninitialized data
+        case SHT_REL:
+        {
+            out << "\nRelocation section '" << name << "' contains " << (unsigned) (it->sh_size / it->sh_entsize) << " entries:\n"
+                << "  Offset  Info  Type       Section              Symbol\n";
+            vector<Reltab_Entry> &reloc = reltab_map[name.substr(4)];
+            for (unsigned i = 0; i < reloc.size(); ++i)
+            {
+                out << "  " << setw(4) << setfill('0') << right << hex << reloc[i].rel.r_offset << "    ";
+                out << setw(4) << setfill('0') << right << hex << reloc[i].rel.r_info << "  ";
+                out << setw(11) << setfill(' ') << left;
+                switch (ELF16_R_TYPE(reloc[i].rel.r_info))
+                {
+                case R_VN_16: out << "R_VN_16"; break;
+                case R_VN_PC16: out << "R_VN_PC_16"; break;
+                default: out << "unknown"; break;
+                }
+                Elf16_Sym sym = symtab_vect[ELF16_R_SYM(reloc[i].rel.r_info)];
+                bool is_section = ELF16_ST_TYPE(sym.st_info) == STT_SECTION;
+                if (is_section) out << left << shstrtab_vect[sym.st_shndx];
+                else out << "                     " << strtab_vect[sym.st_name];
+                out << '\n';
+            }
+            break;
+        }
+        }
+    }
+}
+
+void Assembler::finalize()
+{
+    // Add extra section headers
+    Shdrtab_Entry symtab_entry = Shdrtab_Entry(SHT_SYMTAB, 0, 0, sizeof(Elf16_Sym), sizeof(Elf16_Sym) * symtab_map.size());
+    shdrtab_map.insert(shdrtab_pair_t(".symtab", symtab_entry));
+    shstrtab_vect.push_back(".symtab");
+
+    unsigned size = 0;
+    for (unsigned i = 0; i < strtab_vect.size(); ++i)
+        size += (strtab_vect[i].length() + 1);
+    Shdrtab_Entry strtab_entry = Shdrtab_Entry(SHT_STRTAB, 0, 0, 0, size);
+    shdrtab_map.insert(shdrtab_pair_t(".strtab", strtab_entry));
+    shstrtab_vect.push_back(".strtab");
+
+    size = 0;
+    for (auto it = shdrtab_map.begin(); it != shdrtab_map.end(); ++it)
+        size += it->first.size() + 1;
+    Shdrtab_Entry shstrtab_entry = Shdrtab_Entry(SHT_STRTAB, 0, 0, 0, size);
+    shdrtab_map.insert(shdrtab_pair_t(".shstrtab", shstrtab_entry));
+    shstrtab_vect.push_back(".shstrtab");
+
+    // Generate section header table
+    if (shdrtab_vect.capacity() < Shdrtab_Entry::shdrtab_index)
+        shdrtab_vect.resize(Shdrtab_Entry::shdrtab_index);
+    for (auto it = shdrtab_map.begin(); it != shdrtab_map.end(); ++it)
+        shdrtab_vect[it->second.index] = it->second.shdr;
+
+    // Link relocation tables to the symbol table
+    for (unsigned i = 0; i < shdrtab_vect.size(); ++i)
+        if (shdrtab_vect[i].sh_type == SHT_REL)
+            shdrtab_vect[i].sh_link = symtab_entry.index;
+
+    // ELF Header
+    elf_header.e_ident[EI_MAG0]     = ELFMAG0;
+    elf_header.e_ident[EI_MAG1]     = ELFMAG1;
+    elf_header.e_ident[EI_MAG2]     = ELFMAG2;
+    elf_header.e_ident[EI_MAG3]     = ELFMAG3;
+    elf_header.e_ident[EI_CLASS]    = ELFCLASS16;
+    elf_header.e_ident[EI_DATA]     = ELFDATA2LSB;
+    elf_header.e_ident[EI_VERSION]  = EV_CURRENT;
+    for (unsigned i = EI_PAD; i < EI_NIDENT; ++i) elf_header.e_ident[i] = 0;
+    elf_header.e_type       = ET_REL;
+    elf_header.e_machine    = EM_VN16;
+    elf_header.e_version    = EV_CURRENT;
+    elf_header.e_entry      = 0;
+    elf_header.e_phoff      = 0;
+    elf_header.e_shoff      = sizeof(Elf16_Ehdr);
+    elf_header.e_flags      = 0;
+    elf_header.e_ehsize     = sizeof(Elf16_Ehdr);
+    elf_header.e_phentsize  = 0;
+    elf_header.e_phnum      = 0;
+    elf_header.e_shentsize  = sizeof(Elf16_Shdr);
+    elf_header.e_shnum      = shdrtab_map.size();
+    elf_header.e_shstrndx   = shstrtab_entry.index;
+}
+
+void Assembler::write_output()
+{
+    if (output.is_open())
+        output.close();
+    if (binary)
+    {
+        output.open(output_file, ios::out | ios::binary);
+        // not implemented yet
+    }
+    else
+    {
+        output.open(output_file, ifstream::out);
+        print_file(output);
+        output.close();
     }
 }
 
@@ -271,7 +471,8 @@ Result Assembler::process_directive(const Directive &dir)
                 {
                     strtab_vect.push_back(symbol);
                     Symtab_Entry entry(strtab_vect.size() - 1, 0, ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE), SHN_UNDEF);
-                    symtab_map.insert(Symtab_Pair(symbol, entry));
+                    symtab_map.insert(symtab_pair_t(symbol, entry));
+                    symtab_vect.push_back(entry.sym);
                 }
             }
             else
@@ -306,8 +507,8 @@ Result Assembler::process_directive(const Directive &dir)
         {
             strtab_vect.push_back(symbol);
             Symtab_Entry entry(strtab_vect.size() - 1, word, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_ABS);
-            symtab_map.insert(Symtab_Pair(symbol, entry));
-            symtab_vect.push_back(entry);
+            symtab_map.insert(symtab_pair_t(symbol, entry));
+            symtab_vect.push_back(entry.sym);
         }
         return Result::Success;
     }
@@ -373,11 +574,6 @@ Result Assembler::process_directive(const Directive &dir)
     }
     case Directive::Byte:
     {
-        if (cur_sect.flags & SHF_EXECINSTR)
-        {
-            cerr << "ERROR: Data in .text section!\n";
-            return Result::Error;
-        }
         Elf16_Half byte;
         for (string token : lexer->split_string(dir.p1))
             if (parser->decode_byte(token, byte))
@@ -400,11 +596,6 @@ Result Assembler::process_directive(const Directive &dir)
     }
     case Directive::Word:
     {
-        if (cur_sect.flags & SHF_EXECINSTR)
-        {
-            cerr << "ERROR: Data in .text section!" << cur_sect.name << "\n";
-            return Result::Error;
-        }
         Elf16_Word word;
         for (string token : lexer->split_string(dir.p1))
             if (parser->decode_word(token, word))
@@ -479,11 +670,6 @@ Result Assembler::process_directive(const Directive &dir)
     }
     case Directive::Skip:
     {
-        if (cur_sect.flags & SHF_EXECINSTR)
-        {
-            cerr << "ERROR: Data in .text section!\n";
-            return Result::Error;
-        }
         if (dir.p1 == "")
         {
             cerr << "ERROR: Empty skip size parameter!\n";
@@ -585,8 +771,8 @@ bool Assembler::add_symbol(const string &symbol)
     else type = STT_SECTION;
 
     Symtab_Entry entry(name, cur_sect.loc_cnt, ELF16_ST_INFO(STB_LOCAL, type), cur_sect.shdrtab_index);
-    symtab_map.insert(Symtab_Pair(symbol, entry));
-    symtab_vect.push_back(entry);
+    symtab_map.insert(symtab_pair_t(symbol, entry));
+    symtab_vect.push_back(entry.sym);
 
     return true;
 }
@@ -601,7 +787,7 @@ bool Assembler::add_shdr(const string &name, Elf16_Word type, Elf16_Word flags, 
         return true;
 
     Shdrtab_Entry entry(type, flags, info, entsize);
-    shdrtab_map.insert(Shdrtab_Pair(name, entry));
+    shdrtab_map.insert(shdrtab_pair_t(name, entry));
     shstrtab_vect.push_back(name);
 
     return true;
