@@ -11,19 +11,19 @@
 // Line START: matches all whitespace BEFORE any valid symbols
 #define REGEX_START "^\\s*"
 // Line END: matches all whitespace AFTER valid symbols and comments
-#define REGEX_END "\\s*(?:[@#;(?://)].*)?\r?$"
+#define REGEX_END "\\s*(?:[@#;].*)?\r?$"
 
 // Valid symbol format: starts with '.' or '_' or 'a-z' then can also contain digits
 #define REGEX_SYM "[._a-z][.\\w]*"
 
-// Valid byte value format: binary ex. 0b[0|1]+; octal ex. 0[0-7]+; decimal ex. 0|[1-9][0-9]*; hexadecimal ex. 0x[0-9a-f]+
-#define REGEX_VAL_B "[-~]?(?:0b[0-1]{1,8}|0[0-7]{1,3}|0|[1-9]\\d{0,2}|0x[\\da-f]{1,2})"
+// Valid byte value format
+#define REGEX_VAL_B "[-~]?(?:0b[0-1]{1,8}|0[0-7]{1,3}|0x[\\da-f]{1,2}|0|[1-9]\\d{0,2})"
 
-// Valid word value format: binary ex. 0b[0|1]+; octal ex. 0[0-7]+; decimal ex. [1-9][0-9]*; hexadecimal ex. 0x[0-9a-f]+
-#define REGEX_VAL_W "[-~]?(?:0b[0-1]{1,16}|0[0-7]{1,6}|0|[1-9]\\d{0,4}|0x[\\da-f]{1,4})"
+// Valid word value format
+#define REGEX_VAL_W "[-~]?(?:0b[0-1]{1,16}|0[0-7]{1,6}|0x[\\da-f]{1,4}|0|[1-9]\\d{0,4})"
 
 // Valid content format: anything until a comment
-#define REGEX_CONTENT "[^@#;(?://)]*?"
+#define REGEX_CONTENT "[^@#;]*?"
 
 // *** Immediate addressing modes ***
 // <val> (immediate value embedded inside the instruction)
@@ -178,7 +178,8 @@ private:
             "(shl|shr)(w?)\\s+(" REGEX_ADR_REGMEM_W ")\\s*,\\s*(" REGEX_ADR_IMMREG_W ")"
             ")"
             REGEX_END
-        };
+        },
+        expr_str = "^(\\s*(" REGEX_VAL_W "|" REGEX_SYM "|[\\(\\)\\+\\-\\*\\/%&|^])).*$";
 };
 
 #endif // lexer.h

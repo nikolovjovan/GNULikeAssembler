@@ -5,7 +5,6 @@ using std::vector;
 
 Line::Line() : label(""), content_type(Content_Type::None), dir(nullptr), instr(nullptr) {}
 
-
 Line::Line(const Line &l)
 {
     label = l.label;
@@ -174,21 +173,64 @@ bool Parser::parse_instruction(const string &str, Instruction &result)
     return true; // two-addr instruction (4 tokens)
 }
 
+bool Parser::parse_expression(const string &str, Expression &result)
+{
+    tokens_t tokens;
+    if (!lexer->tokenize_expression(str, tokens)) return false;
+    for (auto token : tokens)
+    {
+        if (token[0] == '(')
+            result.emplace_back(new Operator_Token(Operator_Token::Open));
+        else if (token[0] == ')')
+            result.emplace_back(new Operator_Token(Operator_Token::Close));
+        else if (token[0] == '+')
+            result.emplace_back(new Operator_Token(Operator_Token::Add));
+        else if (token[0] == '-' && token.length() == 1)
+            result.emplace_back(new Operator_Token(Operator_Token::Sub));
+        else if (token[0] == '*')
+            result.emplace_back(new Operator_Token(Operator_Token::Mul));
+        else if (token[0] == '/')
+            result.emplace_back(new Operator_Token(Operator_Token::Div));
+        else if (token[0] == '%')
+            result.emplace_back(new Operator_Token(Operator_Token::Mod));
+        else if (token[0] == '&')
+            result.emplace_back(new Operator_Token(Operator_Token::And));
+        else if (token[0] == '|')
+            result.emplace_back(new Operator_Token(Operator_Token::Or));
+        else if (token[0] == '^')
+            result.emplace_back(new Operator_Token(Operator_Token::Xor));
+        else if (token[0] == '-' || token[0] == '~' || token[0] >= '0' && token[0] <= '9')
+            result.emplace_back(new Number_Token(decode_number(token)));
+        else
+            result.emplace_back(new Symbol_Token(token));
+    }
+    return true;
+}
+
+int Parser::decode_number(const string &str)
+{
+    int result = 0;
+    bool inv = str[0] == '~', neg = str[0] == '-';
+    unsigned first = inv || neg;
+    if (str[first] != '0') result = stoul(str.substr(first), 0, 10);
+    else if (str.length() == first + 1) result = 0; // 0 || ~0 || -0
+    else if (str[first + 1] == 'b') result = stoul(str.substr(first + 2), 0, 2);
+    else if (str[first + 1] != 'x') result = stoul(str.substr(first + 1), 0, 8);
+    else result = stoul(str.substr(first + 2), 0, 16);
+    if (inv) result = ~result;
+    else if (neg) result = -result;
+    return result;
+}
+
 bool Parser::decode_byte(const string &str, uint8_t &byte)
 {
     byte = 0;
     if (str == "") return true;
     string value;
     if (!lexer->match_byte(str, value)) return false;
-    bool inv = value[0] == '~', neg = value[0] == '-';
-    int first = inv || neg;
-    unsigned long long temp;
-    if (value[first] != '0') temp = stoul(value.substr(first), 0, 10);
-    else if (value.length() == first + 1) temp = 0; // 0 || ~0 || -0
-    else if (value[first + 1] == 'b') temp = stoul(value.substr(first + 2), 0, 2);
-    else if (value[first + 1] != 'x') temp = stoul(value.substr(first + 1), 0, 8);
-    else temp = stoul(value.substr(first + 2), 0, 16);
-    if (temp >= 0 && temp <= 0xff)
+    bool inv = str[0] == '~', neg = str[0] == '-';
+    int temp = decode_number(inv || neg ? value.substr(1) : value);
+    if (temp >= 0x0 && temp <= 0xff)
     {
         byte = temp;
         if (inv) byte = ~byte;
@@ -204,15 +246,9 @@ bool Parser::decode_word(const string &str, uint16_t &word)
     if (str == "") return true;
     string value;
     if (!lexer->match_word(str, value)) return false;
-    bool inv = value[0] == '~', neg = value[0] == '-';
-    int first = inv || neg;
-    unsigned long temp;
-    if (value[first] != '0') temp = stoul(value.substr(first), 0, 10);
-    else if (value.length() == first + 1) temp = 0; // 0 || ~0 || -0
-    else if (value[first + 1] == 'b') temp = stoul(value.substr(first + 2), 0, 2);
-    else if (value[first + 1] != 'x') temp = stoul(value.substr(first + 1), 0, 8);
-    else temp = stoul(value.substr(first + 2), 0, 16);
-    if (temp >= 0 && temp <= 0xffff)
+    bool inv = str[0] == '~', neg = str[0] == '-';
+    int temp = decode_number(inv || neg ? value.substr(1) : value);
+    if (temp >= 0x0 && temp <= 0xffff)
     {
         word = temp;
         if (inv) word = ~word;

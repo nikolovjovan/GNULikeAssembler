@@ -1,3 +1,5 @@
+.equ offset, -25 * 2
+
 .text
 
 .global main
@@ -20,7 +22,7 @@ main:
     addb r0h, r1l
     sub [r2], &offset
     mul r5[offset], r3
-    div r0, $offset
+    div r0, $data
     cmpb sp[-5], r0h
     not [r5]
     andb r0h, r1l
@@ -29,7 +31,7 @@ main:
 test:
     testb r0l, -5
     shl *0x682, r3
-    shrb $offset, r2h
+    shrb $data, r2h
     push sp[-892]
     pop r3
     jmp test
@@ -46,7 +48,7 @@ func:
 
 .data
 
-offset: .word 576
+data: .word 576
 
 .section .rodata #, "a" flags are not necessary for this section name, will infer it from name
 

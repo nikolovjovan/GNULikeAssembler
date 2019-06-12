@@ -16,6 +16,7 @@ using std::pair;
 using std::right;
 using std::setfill;
 using std::setw;
+using std::stack;
 using std::string;
 using std::vector;
 
@@ -304,6 +305,8 @@ void Assembler::print_file(ostream &out)
                 out << setw(5) << setfill(' ') << left << dec;
                 if (symtab_vect[i].st_shndx == SHN_UNDEF)
                     out << "UND";
+                else if (symtab_vect[i].st_shndx == SHN_ABS)
+                    out << "ABS";
                 else
                     out << (unsigned) symtab_vect[i].st_shndx;
                 out << strtab_vect[symtab_vect[i].st_name];
@@ -486,17 +489,22 @@ Result Assembler::process_directive(const Directive &dir)
     case Directive::Set:
     {
         if (pass == Pass::Second) return Result::Success;
-        // temporary, need to implement expression parsing
-        string symbol = dir.p1, expr = dir.p2;
-        uint16_t word;
-        if (!parser->decode_word(expr, word))
+        string symbol = dir.p1;
+        Expression expr;
+        if (!parser->parse_expression(dir.p2, expr))
         {
-            cerr << "ERROR: Failed to decode: \"" << expr << "\" as a word value!\n";
+            cerr << "ERROR: Failed to parse expression: \"" << dir.p2 << "\"!\n";
+            return Result::Error;
+        }
+        int value;
+        if (process_expression(expr, value, false) == Result::Error)
+        {
+            cerr << "ERROR: Invalid expression: \"" << dir.p2 <<"\"!\n";
             return Result::Error;
         }
         if (symtab_map.count(symbol) > 0)
         {
-            if (dir.code == Directive::Set) symtab_map.at(symbol).sym.st_value = word;
+            if (dir.code == Directive::Set) symtab_map.at(symbol).sym.st_value = value;
             else
             {
                 cerr << "ERROR: Symbol \"" << symbol << "\" already in use!\n";
@@ -506,7 +514,7 @@ Result Assembler::process_directive(const Directive &dir)
         else
         {
             strtab_vect.push_back(symbol);
-            Symtab_Entry entry(strtab_vect.size() - 1, word, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_ABS);
+            Symtab_Entry entry(strtab_vect.size() - 1, value, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_ABS);
             symtab_map.insert(symtab_pair_t(symbol, entry));
             symtab_vect.push_back(entry.sym);
         }
@@ -574,48 +582,60 @@ Result Assembler::process_directive(const Directive &dir)
     }
     case Directive::Byte:
     {
-        Elf16_Half byte;
-        for (string token : lexer->split_string(dir.p1))
-            if (parser->decode_byte(token, byte))
+        if (pass == Pass::First)
+            cur_sect.loc_cnt += lexer->split_string(dir.p1).size() * sizeof(Elf16_Half);
+        else
+            for (string token : lexer->split_string(dir.p1))
             {
-                if (cur_sect.type == SHT_NOBITS && byte != 0)
+                Expression expr;
+                if (!parser->parse_expression(token, expr))
+                {
+                    cerr << "ERROR: Failed to parse expression: \"" << token << "\"!\n";
+                    return Result::Error;
+                }
+                int value;
+                if (process_expression(expr, value) == Result::Error)
+                {
+                    cerr << "ERROR: Invalid expression: \"" << token <<"\"!\n";
+                    return Result::Error;
+                }
+                if (cur_sect.type == SHT_NOBITS && value != 0)
                 {
                     cerr << "ERROR: Data cannot be initialized in .bss section!\n";
                     return Result::Error;
                 }
-                if (pass == Pass::Second)
-                    section_map.at(cur_sect.name).push_back(byte);
+                section_map.at(cur_sect.name).push_back(value & 0xff);
                 cur_sect.loc_cnt += sizeof(Elf16_Half);
-            }
-            else
-            {
-                cerr << "ERROR: Failed to decode: \"" << token << "\" as a byte value!\n";
-                return Result::Error;
             }
         return Result::Success;
     }
     case Directive::Word:
     {
-        Elf16_Word word;
-        for (string token : lexer->split_string(dir.p1))
-            if (parser->decode_word(token, word))
+        if (pass == Pass::First)
+            cur_sect.loc_cnt += lexer->split_string(dir.p1).size() * sizeof(Elf16_Word);
+        else
+            for (string token : lexer->split_string(dir.p1))
             {
-                if (cur_sect.type == SHT_NOBITS && word != 0)
+                Expression expr;
+                if (!parser->parse_expression(token, expr))
+                {
+                    cerr << "ERROR: Failed to parse expression: \"" << token << "\"!\n";
+                    return Result::Error;
+                }
+                int value;
+                if (process_expression(expr, value) == Result::Error)
+                {
+                    cerr << "ERROR: Invalid expression: \"" << token <<"\"!\n";
+                    return Result::Error;
+                }
+                if (cur_sect.type == SHT_NOBITS && value != 0)
                 {
                     cerr << "ERROR: Data cannot be initialized in .bss section!\n";
                     return Result::Error;
                 }
-                if (pass == Pass::Second)
-                {
-                    section_map.at(cur_sect.name).push_back(word & 0x00ff); // little-endian
-                    section_map.at(cur_sect.name).push_back(word >> 8);
-                }
+                section_map.at(cur_sect.name).push_back(value & 0xff); // little-endian
+                section_map.at(cur_sect.name).push_back(value >> 8);
                 cur_sect.loc_cnt += sizeof(Elf16_Word);
-            }
-            else
-            {
-                cerr << "ERROR: Failed to decode: \"" << token << "\" as a word value!\n";
-                return Result::Error;
             }
         return Result::Success;
     }
@@ -750,6 +770,108 @@ Result Assembler::process_instruction(const Instruction &instr)
     return Result::Error;
 }
 
+Result Assembler::process_expression(const Expression &expr, int &value, bool allow_reloc)
+{
+    typedef pair<int, int> operand_t; // Operand : { value, class_index (0 - absolute, 1 - relative) }
+    typedef Operator_Token operator_t;
+    stack<operand_t> values;
+    stack<operator_t> ops;
+    int rank = 0;
+    value = 0;
+    for (auto &token : expr)
+    {
+        if (token->type == Expression_Token::Operator)
+        {
+            auto &op = static_cast<Operator_Token&>(*token);
+            if (op.op_type == Operator_Token::Open)
+                ops.push(op);
+            else
+            {
+                while (!ops.empty() && (
+                    op.op_type == Operator_Token::Close && ops.top().op_type != Operator_Token::Open || 
+                    op.op_type != Operator_Token::Close && ops.top().priority() >= op.priority()))
+                {
+                    operand_t val2 = values.top();
+                    values.pop();
+                    operand_t val1 = values.top();
+                    values.pop();
+                    Operator_Token oper = ops.top();
+                    ops.pop();
+                    values.push(operand_t(oper.calculate(val1.first, val2.first), oper.get_class_index(val1.second, val2.second)));
+                    rank--;
+                    if (rank < 1) return Result::Error;
+                }
+                if (op.op_type == Operator_Token::Close)
+                    ops.pop(); // Pop opening brace
+                else
+                    ops.push(op); // Push current operator
+            }
+        }
+        else if (token->type == Expression_Token::Number)
+        {
+            auto &num = static_cast<Number_Token&>(*token);
+            values.push(operand_t(num.value, 0)); // absolute value
+            rank++;
+        }
+        else
+        {
+            auto &sym = static_cast<Symbol_Token&>(*token);
+            if (symtab_map.count(sym.name) == 0)
+            {
+                cerr << "ERROR: Undefined reference to: \"" << sym.name << "\"!\n";
+                return Result::Error;
+            }
+            Symtab_Entry entry = symtab_map.at(sym.name);
+            values.push(operand_t(entry.sym.st_value, (entry.sym.st_shndx == SHN_ABS ? 0 : 1)));
+            rank++;
+        }
+    }
+    while (!ops.empty())
+    {
+        operand_t val2 = values.top();
+        values.pop();
+        operand_t val1 = values.top();
+        values.pop();
+        Operator_Token oper = ops.top();
+        ops.pop();
+        values.push(operand_t(oper.calculate(val1.first, val2.first), oper.get_class_index(val1.second, val2.second)));
+        rank--;
+    }
+    if (rank != 1)
+    {
+        cerr << "ERROR: Invalid expression!\n";
+        return Result::Error;
+    }
+    operand_t result = values.top();
+    values.pop();
+    if (result.second == 0) value = result.first;
+    else if (result.second == 1)
+    {
+        if (!allow_reloc)
+        {
+            cerr << "ERROR: Expression result relocatable, but not allowed!\n";
+            return Result::Error;
+        }
+        for (auto &token : expr)
+            if (token->type == Expression_Token::Symbol)
+            {
+                auto &sym = static_cast<Symbol_Token&>(*token);
+                if (!insert_reloc(sym.name, R_VN_16, 0, false))
+                {
+                    cerr << "ERROR: Failed to insert reloc for: \"" << sym.name << "\"!\n";
+                    return Result::Error;
+                }
+            }
+        value = result.first;
+    }
+    else
+    {
+        cerr << "ERROR: Invalid class index: " << result.second << "!\n";
+        return Result::Error;
+    }
+    return Result::Success;
+}
+
 bool Assembler::add_symbol(const string &symbol)
 {
     if (symtab_map.count(symbol) > 0)
@@ -830,7 +952,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             cur_sect.loc_cnt++;
             if (token1[0] == '&')
             {
-                if (add_reloc(token1.substr(1), R_VN_16, next_instr))
+                if (insert_reloc(token1.substr(1), R_VN_16, next_instr))
                     return true;
             }
             else
@@ -841,7 +963,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
                     cerr << "ERROR: Failed to decode: \"" << token1 << "\" as a word value!\n";
                     return false;
                 }
-                section_map.at(cur_sect.name).push_back(word & 0x00ff); // little-endian
+                section_map.at(cur_sect.name).push_back(word & 0xff); // little-endian
                 section_map.at(cur_sect.name).push_back(word >> 8);
                 cur_sect.loc_cnt += 2;
                 return true;
@@ -904,7 +1026,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         {
             opdesc |= Addressing_Mode::RegIndOff16; // 16-bit offset
             section_map.at(cur_sect.name).push_back(opdesc);
-            section_map.at(cur_sect.name).push_back(wordoff & 0x00ff); // little-endian
+            section_map.at(cur_sect.name).push_back(wordoff & 0xff); // little-endian
             section_map.at(cur_sect.name).push_back(wordoff >> 8);
             cur_sect.loc_cnt += 3;
         }
@@ -926,8 +1048,21 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         opdesc |= Addressing_Mode::RegIndOff16;
         section_map.at(cur_sect.name).push_back(opdesc);
         cur_sect.loc_cnt++;
-        if (add_reloc(token2, R_VN_16, next_instr))
-            return true;
+        if (symtab_map.count(token2) == 0)
+        {
+            cerr << "ERROR: Undefined reference to: \"" << token2 << "\"!\n";
+            return false;
+        }
+        Symtab_Entry entry = symtab_map.at(token2);
+        if (entry.sym.st_shndx != SHN_ABS)
+        {
+            cerr << "ERROR: Relative symbol: \"" << token2 << "\" cannot be used as an offset for register indirect addressing!\n";
+            return false;
+        }
+        section_map.at(cur_sect.name).push_back(entry.sym.st_value & 0xff); // little-endian
+        section_map.at(cur_sect.name).push_back(entry.sym.st_value >> 8);
+        cur_sect.loc_cnt += 2;
+        return true;
     }
     else if (lexer->match_memsym(str, token1))
     {
@@ -935,7 +1070,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         if (pcrel) section_map.at(cur_sect.name).push_back(Addressing_Mode::RegIndOff16 | 7 << 1);
         else section_map.at(cur_sect.name).push_back(Addressing_Mode::Mem);
         cur_sect.loc_cnt++;
-        if (add_reloc(pcrel ? token1.substr(1) : token1, pcrel ? R_VN_PC16 : R_VN_16, next_instr))
+        if (insert_reloc(pcrel ? token1.substr(1) : token1, pcrel ? R_VN_PC16 : R_VN_16, next_instr))
             return true;
     }
     else if (lexer->match_memabs(str, token1))
@@ -947,7 +1082,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             return false;
         }
         section_map.at(cur_sect.name).push_back(Addressing_Mode::Mem);
-        section_map.at(cur_sect.name).push_back(address & 0x00ff); // little-endian
+        section_map.at(cur_sect.name).push_back(address & 0xff); // little-endian
         section_map.at(cur_sect.name).push_back(address >> 8);
         cur_sect.loc_cnt += 3;
         return true;
@@ -956,7 +1091,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
     return false;
 }
 
-bool Assembler::add_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr)
+bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr, bool place)
 {
     if (symtab_map.count(symbol) == 0)
     {
@@ -984,7 +1119,8 @@ bool Assembler::add_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr
         value = global ? 0 : entry.sym.st_value;
         if (type == R_VN_PC16) value += cur_sect.loc_cnt + 1 - next_instr;
     }
-    section_map.at(cur_sect.name).push_back(value & 0x00ff); // little-endian
+    if (!place) return true;
+    section_map.at(cur_sect.name).push_back(value & 0xff); // little-endian
     section_map.at(cur_sect.name).push_back(value >> 8);
     cur_sect.loc_cnt += 2;
     return true;

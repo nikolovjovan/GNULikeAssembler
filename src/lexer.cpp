@@ -29,6 +29,7 @@ Lexer::Lexer()
     zeroaddr_rx.assign(zeroaddr_str, regex::icase | regex::optimize);
     oneaddr_rx.assign(oneaddr_str, regex::icase | regex::optimize);
     twoaddr_rx.assign(twoaddr_str, regex::icase | regex::optimize);
+    expr_rx.assign(expr_str, regex::icase | regex::optimize);
 }
 
 string Lexer::tolower(const string &str)
@@ -202,8 +203,18 @@ bool Lexer::tokenize_twoaddr(const string &str, tokens_t &tokens)
 
 bool Lexer::tokenize_expression(const string &str, tokens_t &tokens)
 {
-    // work on this...
-    return Lexer::tokenize_content(str, expr_rx, tokens, false);
+    smatch m;
+    string tmp = str;
+    bool valid = false;
+    while (!tmp.empty())
+        if (!regex_match(tmp, m, expr_rx)) break;
+        else
+        {
+            tokens.push_back(m.str(2));
+            tmp = tmp.substr(m.str(1).length());
+            if (tmp.empty()) valid = true;
+        }
+    return valid;
 }
 
 list<string> Lexer::tokenize_string(const string &str, const regex &regex)

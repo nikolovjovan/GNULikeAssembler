@@ -33,44 +33,70 @@ typedef struct Instruction
 class Expression_Token
 {
 public:
-    enum Token_Type { OpenBracket, CloseBracket, Plus, Minus, Multiply, Divide, Number, Symbol };
-    Token_Type type;
+    enum Token_Type { Operator, Number, Symbol };
+    const Token_Type type;
+    Expression_Token(const Expression_Token &t) : type(t.type) {}
+    Expression_Token(Token_Type type) : type(type) {}
+    virtual ~Expression_Token() {}
 };
 
-class Operator_Token : Expression_Token
+class Operator_Token : public Expression_Token
 {
 public:
-    unsigned calculate(unsigned a, unsigned b)
+    enum Operator_Type { Open, Close, Add, Sub, Mul, Div, Mod, And, Or, Xor };
+    const Operator_Type op_type;
+
+    Operator_Token(const Operator_Token &t) : Expression_Token(Operator), op_type(t.op_type) {}
+    Operator_Token(Operator_Type op_type) : Expression_Token(Operator), op_type(op_type) {}
+
+    int priority()
     {
-        switch (type)
-        {
-        case Plus:
-            return a + b;
-        case Minus:
-            return a - b;
-        case Multiply:
-            return a * b;
-        case Divide:
-            return a / b;
-        default:
-            return 0;
-        };
+        if (op_type == Open) return 1;
+        if (op_type == Or) return 2;
+        if (op_type == Xor) return 3;
+        if (op_type == And) return 4;
+        if (op_type == Add || op_type == Sub) return 5;
+        if (op_type == Mul || op_type == Div || op_type == Mod) return 6;
+        return 0;
+    }
+
+    int calculate(unsigned a, unsigned b)
+    {
+        if (op_type == Or) return a | b;
+        if (op_type == Xor) return a ^ b;
+        if (op_type == And) return a & b;
+        if (op_type == Add) return a + b;
+        if (op_type == Sub) return a - b;
+        if (op_type == Mul) return a * b;
+        if (op_type == Div) return (b == 0 ? -1 : a / b);
+        if (op_type == Mod) return a % b;
+        return -1;
+    }
+
+    int get_class_index(int ci_a, int ci_b)
+    {
+        if (op_type == Sub) return ci_a - ci_b;
+        return ci_a + ci_b;
     }
 };
 
-class Number_Token : Expression_Token
+class Number_Token : public Expression_Token
 {
 public:
-    unsigned value;
+    const int value;
+    Number_Token(const Number_Token &t) : Expression_Token(Number), value(t.value) {}
+    Number_Token(int value) : Expression_Token(Number), value(value) {}
 };
 
-class Symbol_Token : Expression_Token
+class Symbol_Token : public Expression_Token
 {
 public:
     std::string name;
+    Symbol_Token(const Symbol_Token &t) : Expression_Token(Symbol), name(t.name) {}
+    Symbol_Token(const std::string &name) : Expression_Token(Symbol), name(name) {}
 };
 
-typedef std::vector<Expression_Token> Expression;
+typedef std::vector<std::unique_ptr<Expression_Token>> Expression;
 
 class Parser;
 
@@ -110,6 +136,7 @@ public:
     bool parse_instruction(const std::string &str, Instruction &result);
     bool parse_expression(const std::string &str, Expression &result);
 
+    int decode_number(const std::string &str);
     bool decode_byte(const std::string &str, uint8_t &result);
     bool decode_word(const std::string &str, uint16_t &result);
     bool decode_register(const std::string &str, uint8_t &regdesc);

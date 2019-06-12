@@ -145,13 +145,13 @@ private:
     Result process_line(Line_Info &info);
     Result process_directive(const Directive &dir);
     Result process_instruction(const Instruction &instr);
-    Result process_expression(const Expression &expr, bool reloc);
+    Result process_expression(const Expression &expr, int &value, bool allow_reloc = true);
 
     bool add_symbol(const std::string &symbol);
     bool add_shdr(const std::string &name, Elf16_Word type, Elf16_Word flags, bool reloc = false, Elf16_Word info = 0, Elf16_Word entsize = 0);
 
     bool insert_operand(const std::string &str, uint8_t size, Elf16_Addr next_instr);
-    bool add_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr = 0);
+    bool insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr = 0, bool place = true);
 };
 
 #endif  // assembler.h
