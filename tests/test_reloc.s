@@ -29,12 +29,14 @@ hello_world: .byte char_H, char_e, char_l, char_l, char_o, char_space, char_W, c
 
 .data
 
-.word 5, 6, 3 * -6
+n:
+.word 5, 6, 3 * -6, ARRAY_BEGIN + 3, n
 
-NIZ_POCETAK:
+ARRAY_BEGIN:
 .skip 100, 0xff
-NIZ_KRAJ:
+ARRAY_END:
 
-.equ NIZ_DUZINA, (NIZ_KRAJ - NIZ_POCETAK) / 2   # word array length
+.equ ARRAY_LENGTH, (ARRAY_END - ARRAY_BEGIN) / 2   # word array length
+# .equ TEST_BAD, ARRAY_END * 3 - 75 & 0b101
 
 .end

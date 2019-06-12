@@ -49,11 +49,14 @@ typedef struct Symtab_Entry
 {
     static Elf16_Addr symtab_index;
 
-    Elf16_Addr index = symtab_index++;
+    Elf16_Addr index;
     Elf16_Sym sym;
+
+    Symtab_Entry() {};
 
     Symtab_Entry(Elf16_Word name, Elf16_Addr value, uint8_t info, Elf16_Section shndx)
     {
+        index           = symtab_index++;
         sym.st_name     = name;     // String table index
         sym.st_value    = value;    // Symbol value = 1* label - current location counter, 2* constant - .equ value
         sym.st_size     = 0;        // Symbol size
@@ -67,11 +70,14 @@ typedef struct Shdrtab_Entry
 {
     static Elf16_Addr shdrtab_index;
 
-    Elf16_Addr index = shdrtab_index++;
+    Elf16_Addr index;
     Elf16_Shdr shdr;
+
+    Shdrtab_Entry() {};
 
     Shdrtab_Entry(Elf16_Word type, Elf16_Word flags, Elf16_Word info = 0, Elf16_Word entsize = 0, Elf16_Word size = 0)
     {
+        index               = shdrtab_index++;
         shdr.sh_name        = index;    // Section header string table index
         shdr.sh_type        = type;     // Section type
         shdr.sh_flags       = flags;    // Section flags
@@ -147,8 +153,14 @@ private:
     Result process_instruction(const Instruction &instr);
     Result process_expression(const Expression &expr, int &value, bool allow_reloc = true);
 
+    bool get_symtab_entry(const std::string &str, Symtab_Entry &entry);
+    int get_operand_code_size(const std::string &str, uint8_t operand_size);
+
     bool add_symbol(const std::string &symbol);
     bool add_shdr(const std::string &name, Elf16_Word type, Elf16_Word flags, bool reloc = false, Elf16_Word info = 0, Elf16_Word entsize = 0);
+
+    void push_byte(Elf16_Half byte);
+    void push_word(Elf16_Word word);
 
     bool insert_operand(const std::string &str, uint8_t size, Elf16_Addr next_instr);
     bool insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr = 0, bool place = true);

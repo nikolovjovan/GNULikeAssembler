@@ -14,8 +14,8 @@ Lexer::Lexer()
     symbol_rx.assign(symbol_str, regex::icase | regex::optimize);
     byte_rx.assign(byte_str, regex::icase | regex::optimize);
     word_rx.assign(word_str, regex::icase | regex::optimize);
-    byte_operand_rx.assign(byte_operand_str, regex::icase | regex::optimize);
-    word_operand_rx.assign(word_operand_str, regex::icase | regex::optimize);
+    operand_1b_rx.assign(operand_1b_str, regex::icase | regex::optimize);
+    operand_2b_rx.assign(operand_2b_str, regex::icase | regex::optimize);
     imm_b_rx.assign(imm_b_str, regex::icase | regex::optimize);
     imm_w_rx.assign(imm_w_str, regex::icase | regex::optimize);
     regdir_b_rx.assign(regdir_b_str, regex::icase | regex::optimize);
@@ -75,16 +75,16 @@ bool Lexer::match_word(const string &str, string &result)
     return res;
 }
 
-bool Lexer::match_byte_operand(const string &str)
+bool Lexer::match_operand_1b(const string &str)
 {
     tokens_t tokens;
-    return Lexer::tokenize_content(str, byte_operand_rx, tokens);
+    return Lexer::tokenize_content(str, operand_1b_rx, tokens);
 }
 
-bool Lexer::match_word_operand(const string &str, string &offset)
+bool Lexer::match_operand_2b(const string &str, string &offset)
 {
     tokens_t tokens;
-    bool res = Lexer::tokenize_content(str, word_operand_rx, tokens);
+    bool res = Lexer::tokenize_content(str, operand_2b_rx, tokens);
     if (res) offset = tokens[0];
     return res;
 }

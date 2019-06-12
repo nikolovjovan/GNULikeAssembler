@@ -140,8 +140,6 @@ public:
     bool decode_byte(const std::string &str, uint8_t &result);
     bool decode_word(const std::string &str, uint16_t &result);
     bool decode_register(const std::string &str, uint8_t &regdesc);
-
-    uint8_t get_operand_size(const std::string &str);
 private:
     Lexer *lexer;
 

@@ -27,7 +27,7 @@
 
 // *** Immediate addressing modes ***
 // <val> (immediate value embedded inside the instruction)
-#define REGEX_ADR_IMM_B REGEX_VAL_B
+#define REGEX_ADR_IMM_B REGEX_VAL_B "|&" REGEX_SYM
 // <val> or &<symbol_name> (immediate value embedded inside the instruction)
 #define REGEX_ADR_IMM_W REGEX_VAL_W "|&" REGEX_SYM
 
@@ -76,8 +76,8 @@ public:
     bool match_symbol(const std::string &str, std::string &result);
     bool match_byte(const std::string &str, std::string &result);
     bool match_word(const std::string &str, std::string &result);
-    bool match_byte_operand(const std::string &str);
-    bool match_word_operand(const std::string &str, std::string &offset);
+    bool match_operand_1b(const std::string &str);
+    bool match_operand_2b(const std::string &str, std::string &offset);
     bool match_imm_b(const std::string &str, std::string &value);
     bool match_imm_w(const std::string &str, std::string &value);
     bool match_regdir_b(const std::string &str, std::string &reg);
@@ -100,7 +100,7 @@ private:
 
     std::regex
         empty_rx, line_rx, split_rx, symbol_rx, byte_rx, word_rx,
-        byte_operand_rx, word_operand_rx,
+        operand_1b_rx, operand_2b_rx,
         imm_b_rx, imm_w_rx, regdir_b_rx, regdir_w_rx,
         regind_rx, regindoff_rx, regindsym_rx, memsym_rx, memabs_rx,
         directive_rx, zeroaddr_rx, oneaddr_rx, twoaddr_rx, expr_rx;
@@ -112,8 +112,8 @@ private:
         symbol_str = "\\s*(" REGEX_SYM ")\\s*",
         byte_str = "\\s*(" REGEX_VAL_B ")\\s*",
         word_str = "\\s*(" REGEX_VAL_W ")\\s*",
-        byte_operand_str = "\\s*(" REGEX_ADR_REGDIR_B "|" REGEX_ADR_REGDIR_W "|\\[\\s*(?:" REGEX_ADR_REGDIR_W ")\\s*\\])\\s*",
-        word_operand_str = "\\s*(?:(" REGEX_ADR_IMM_B ")|(?:" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_ADR_IMM_B ")\\s*\\])\\s*",
+        operand_1b_str = "\\s*(" REGEX_ADR_REGDIR_B "|" REGEX_ADR_REGDIR_W "|\\[\\s*(?:" REGEX_ADR_REGDIR_W ")\\s*\\])\\s*",
+        operand_2b_str = "\\s*(?:(?:" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_VAL_B "|" REGEX_SYM ")\\s*\\]|(" REGEX_ADR_IMM_B "))\\s*",
         imm_b_str = "\\s*(" REGEX_ADR_IMM_B ")\\s*",
         imm_w_str = "\\s*(" REGEX_ADR_IMM_W ")\\s*",
         regdir_b_str = "\\s*(" REGEX_ADR_REGDIR_B ")\\s*",

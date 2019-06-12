@@ -267,17 +267,3 @@ bool Parser::decode_register(const string &str, uint8_t &regdesc)
     else return false;
     return true;
 }
-
-uint8_t Parser::get_operand_size(const string &str)
-{
-    if (lexer->match_byte_operand(str)) return 1;
-    string offset_str;
-    if (!lexer->match_word_operand(str, offset_str)) return 3;
-    uint8_t offset;
-    if (decode_byte(offset_str, offset))
-    {
-        if (offset == 0) return 1; // if offset is zero assume regind without offset
-        return 2;
-    }
-    return 3;
-}

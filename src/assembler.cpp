@@ -269,6 +269,7 @@ void Assembler::print_file(ostream &out)
         case SHT_PROGBITS:
         {
             vector<Elf16_Half> &data = section_map[name];
+            if (data.size() == 0) continue;
             out << "\nContents of section '" << name << "':\n";
             for (unsigned i = 0; i < data.size(); ++i)
                 out << setw(2) << setfill('0') << right << hex << (unsigned) data[i]
@@ -604,8 +605,7 @@ Result Assembler::process_directive(const Directive &dir)
                     cerr << "ERROR: Data cannot be initialized in .bss section!\n";
                     return Result::Error;
                 }
-                section_map.at(cur_sect.name).push_back(value & 0xff);
-                cur_sect.loc_cnt += sizeof(Elf16_Half);
+                push_byte(value);
             }
         return Result::Success;
     }
@@ -633,9 +633,7 @@ Result Assembler::process_directive(const Directive &dir)
                     cerr << "ERROR: Data cannot be initialized in .bss section!\n";
                     return Result::Error;
                 }
-                section_map.at(cur_sect.name).push_back(value & 0xff); // little-endian
-                section_map.at(cur_sect.name).push_back(value >> 8);
-                cur_sect.loc_cnt += sizeof(Elf16_Word);
+                push_word(value);
             }
         return Result::Success;
     }
@@ -675,16 +673,14 @@ Result Assembler::process_directive(const Directive &dir)
         Elf16_Word remainder = cur_sect.loc_cnt & (alignment - 1);
         if (remainder)
         {
-            unsigned fill_size = alignment - remainder;
-            if (fill_size > max)
+            unsigned size = alignment - remainder;
+            if (size > max)
             {
-                cerr << "ERROR: Required fill: " << fill_size << " is larger than max allowed: " << (unsigned) max << "! Cannot apply alignment!\n";
+                cerr << "ERROR: Required fill: " << size << " is larger than max allowed: " << (unsigned) max << "! Cannot apply alignment!\n";
                 return Result::Error;
             }
-            if (pass == Pass::Second)
-                for (unsigned i = 0; i < fill_size; ++i)
-                    section_map.at(cur_sect.name).push_back(fill);
-            cur_sect.loc_cnt += fill_size;
+            if (pass == Pass::First) cur_sect.loc_cnt += size;
+            else for (unsigned i = 0; i < size; ++i) push_byte(fill);
         }
         return Result::Success;
     }
@@ -708,10 +704,8 @@ Result Assembler::process_directive(const Directive &dir)
             cerr << "ERROR: Failed to decode: \"" << dir.p2 << "\" as a byte value!\n";
             return Result::Error;
         }
-        if (pass == Pass::Second)
-            for (unsigned i = 0; i < size; ++i)
-                section_map.at(cur_sect.name).push_back(fill);
-        cur_sect.loc_cnt += size;
+        if (pass == Pass::First) cur_sect.loc_cnt += size;
+        else for (unsigned i = 0; i < size; ++i) push_byte(fill);
         return Result::Success;
     }
     default: return Result::Error;
@@ -725,45 +719,42 @@ Result Assembler::process_instruction(const Instruction &instr)
         cerr << "ERROR: Code in unexecutable section: \"" << cur_sect.name << "\"!\n";
         return Result::Error;
     }
-    cur_sect.loc_cnt += sizeof(Elf16_Half);
     if (instr.op_cnt == 0)
     {   // zero-address instructions
-        if (pass == Pass::Second)
-            section_map.at(cur_sect.name).push_back(instr.code << 3);
+        if (pass == Pass::First) cur_sect.loc_cnt += sizeof(Elf16_Half);
+        else push_byte(instr.code << 3);
         return Result::Success;
     }
     else if (instr.op_cnt == 1)
     {   // one-address instructions
-        Elf16_Addr next_instr = cur_sect.loc_cnt +
-            parser->get_operand_size(instr.op1);
-        if (pass == Pass::First)
-            cur_sect.loc_cnt = next_instr;
+        int op_size = get_operand_code_size(instr.op1, instr.op_size);
+        if (op_size < 1) return Result::Error;
+        Elf16_Addr next_instr = cur_sect.loc_cnt + sizeof(Elf16_Half) + op_size;
+        if (pass == Pass::First) cur_sect.loc_cnt = next_instr;
         else
         {
             Elf16_Half opcode = instr.code << 3;
             if (instr.op_size == Operand_Size::Word) opcode |= 0x4; // S bit = 0 for byte sized operands, = 1 for word sized operands
-            section_map.at(cur_sect.name).push_back(opcode);
-            if (!insert_operand(instr.op1, instr.op_size, next_instr))
-                return Result::Error;
+            push_byte(opcode);
+            if (!insert_operand(instr.op1, instr.op_size, next_instr)) return Result::Error;
         }
         return Result::Success;
     }
     else if (instr.op_cnt == 2)
     {   // two-address instructions
-        Elf16_Addr next_instr = cur_sect.loc_cnt +
-            parser->get_operand_size(instr.op1) +
-            parser->get_operand_size(instr.op2);
-        if (pass == Pass::First)
-            cur_sect.loc_cnt = next_instr;
+        int op1_size = get_operand_code_size(instr.op1, instr.op_size);
+        if (op1_size < 1) return Result::Error;
+        int op2_size = get_operand_code_size(instr.op2, instr.op_size);
+        if (op2_size < 1) return Result::Error;
+        Elf16_Addr next_instr = cur_sect.loc_cnt + sizeof(Elf16_Half) + op1_size + op2_size;
+        if (pass == Pass::First) cur_sect.loc_cnt = next_instr;
         else
         {
             Elf16_Half opcode = instr.code << 3;
             if (instr.op_size == Operand_Size::Word) opcode |= 0x4; // S bit = 0 for byte sized operands, = 1 for word sized operands
-            section_map.at(cur_sect.name).push_back(opcode);
-            if (!insert_operand(instr.op1, instr.op_size, next_instr))
-                return Result::Error;
-            if (!insert_operand(instr.op2, instr.op_size, next_instr))
-                return Result::Error;
+            push_byte(opcode);
+            if (!insert_operand(instr.op1, instr.op_size, next_instr)) return Result::Error;
+            if (!insert_operand(instr.op2, instr.op_size, next_instr)) return Result::Error;
         }
         return Result::Success;
     }
@@ -816,13 +807,9 @@ Result Assembler::process_expression(const Expression &expr, int &value, bool al
         else
         {
             auto &sym = static_cast<Symbol_Token&>(*token);
-            if (symtab_map.count(sym.name) == 0)
-            {
-                cerr << "ERROR: Undefined reference to: \"" << sym.name << "\"!\n";
-                return Result::Error;
-            }
-            Symtab_Entry entry = symtab_map.at(sym.name);
-            values.push(operand_t(entry.sym.st_value, (entry.sym.st_shndx == SHN_ABS ? 0 : 1)));
+            Symtab_Entry entry;
+            if (!get_symtab_entry(sym.name, entry)) return Result::Error;
+            values.push(operand_t((ELF16_ST_BIND(entry.sym.st_info) == STB_LOCAL ? entry.sym.st_value : 0), (entry.sym.st_shndx == SHN_ABS ? 0 : 1)));
             rank++;
         }
     }
@@ -872,6 +859,34 @@ Result Assembler::process_expression(const Expression &expr, int &value, bool al
     return Result::Success;
 }
 
+bool Assembler::get_symtab_entry(const string &str, Symtab_Entry &entry)
+{
+    if (symtab_map.count(str) == 0)
+    {
+        cerr << "ERROR: Undefined reference to: \"" << str << "\"!\n";
+        return false;
+    }
+    entry = symtab_map.at(str);
+    return true;
+}
+
+int Assembler::get_operand_code_size(const string &str, uint8_t expected_size)
+{
+    if (lexer->match_operand_1b(str)) return 1;
+    string offset_str;
+    if (!lexer->match_operand_2b(str, offset_str)) return 3;
+    string symbol_str;
+    uint8_t offset;
+    if (lexer->match_symbol(offset_str.substr(offset_str[0] == '&'), symbol_str))
+        return 1 + expected_size; // cannot verify symbol now, just use expected size
+    else if (parser->decode_byte(offset_str, offset))
+    {
+        if (offset == 0) return 1; // if offset is zero assume regind without offset
+        return 2;
+    }
+    return 3;
+}
+
 bool Assembler::add_symbol(const string &symbol)
 {
     if (symtab_map.count(symbol) > 0)
@@ -915,6 +930,19 @@ bool Assembler::add_shdr(const string &name, Elf16_Word type, Elf16_Word flags, 
     return true;
 }
 
+void Assembler::push_byte(Elf16_Half byte)
+{
+    section_map.at(cur_sect.name).push_back(byte);
+    cur_sect.loc_cnt += sizeof(Elf16_Half);
+}
+
+void Assembler::push_word(Elf16_Word word)
+{
+    section_map.at(cur_sect.name).push_back(word & 0xff); // little-endian
+    section_map.at(cur_sect.name).push_back(word >> 8);
+    cur_sect.loc_cnt += sizeof(Elf16_Word);
+}
+
 bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_instr)
 {
     if (size == Operand_Size::None) return false;
@@ -923,24 +951,40 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
     {
         if (lexer->match_imm_b(str, token1))
         {
-            Elf16_Half byte;
-            if (!parser->decode_byte(token1, byte))
+            push_byte(Addressing_Mode::Imm);
+            if (token1[0] == '&')
             {
-                cerr << "ERROR: Failed to decode: \"" << token1 << "\" as a byte value!\n";
+                Symtab_Entry entry;
+                if (!get_symtab_entry(token1, entry)) return false;
+                if (entry.sym.st_shndx != SHN_ABS)
+                {
+                    cerr << "ERROR: Symbol: \"" << token1 << "\" is not an absolute symbol and cannot be used for byte-immediate addressing!\n";
+                    return false;
+                }
+                int16_t value = entry.sym.st_value;
+                push_byte(value & 0xff);
+                if (value >= -128 && value <= 127) return true;
+                cerr << "ERROR: Value of absolute symbol: \"" << token1 << "\" is greater than a byte value and cannot be used for byte-immediate addressing!\n";
                 return false;
             }
-            section_map.at(cur_sect.name).push_back(Addressing_Mode::Imm);
-            section_map.at(cur_sect.name).push_back(byte);
-            cur_sect.loc_cnt += 2;
-            return true;
+            else
+            {
+                Elf16_Half byte;
+                if (!parser->decode_byte(token1, byte))
+                {
+                    cerr << "ERROR: Failed to decode: \"" << token1 << "\" as a byte value!\n";
+                    return false;
+                }
+                push_byte(byte);
+                return true;
+            }
         }
         else if (lexer->match_regdir_b(str, token1))
         {
             Elf16_Half opdesc = Addressing_Mode::RegDir;
             opdesc |= (token1[1] - '0') << 1;
             if (token1[2] == 'h') opdesc |= 0x1;
-            section_map.at(cur_sect.name).push_back(opdesc);
-            cur_sect.loc_cnt++;
+            push_byte(opdesc);
             return true;
         }
     }
@@ -948,12 +992,10 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
     {
         if (lexer->match_imm_w(str, token1))
         {
-            section_map.at(cur_sect.name).push_back(Addressing_Mode::Imm);
-            cur_sect.loc_cnt++;
+            push_byte(Addressing_Mode::Imm);
             if (token1[0] == '&')
             {
-                if (insert_reloc(token1.substr(1), R_VN_16, next_instr))
-                    return true;
+                if (insert_reloc(token1.substr(1), R_VN_16, next_instr)) return true;
             }
             else
             {
@@ -963,9 +1005,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
                     cerr << "ERROR: Failed to decode: \"" << token1 << "\" as a word value!\n";
                     return false;
                 }
-                section_map.at(cur_sect.name).push_back(word & 0xff); // little-endian
-                section_map.at(cur_sect.name).push_back(word >> 8);
-                cur_sect.loc_cnt += 2;
+                push_word(word);
                 return true;
             }
         }
@@ -978,8 +1018,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
                 return false;
             }
             opdesc |= Addressing_Mode::RegDir;
-            section_map.at(cur_sect.name).push_back(opdesc);
-            cur_sect.loc_cnt++;
+            push_byte(opdesc);
             return true;
         }
     }
@@ -992,8 +1031,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             return false;
         }
         opdesc |= Addressing_Mode::RegInd;
-        section_map.at(cur_sect.name).push_back(opdesc);
-        cur_sect.loc_cnt++;
+        push_byte(opdesc);
         return true;
     }
     else if (lexer->match_regindoff(str, token1, token2))
@@ -1011,24 +1049,20 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             if (byteoff == 0)
             {
                 opdesc |= Addressing_Mode::RegInd; // zero-offset = regind without offset
-                section_map.at(cur_sect.name).push_back(opdesc);
-                cur_sect.loc_cnt++;
+                push_byte(opdesc);
             }
             else
             {
                 opdesc |= Addressing_Mode::RegIndOff8; // 8-bit offset
-                section_map.at(cur_sect.name).push_back(opdesc);
-                section_map.at(cur_sect.name).push_back(byteoff);
-                cur_sect.loc_cnt += 2;
+                push_byte(opdesc);
+                push_byte(byteoff);
             }
         }
         else if (parser->decode_word(token2, wordoff))
         {
             opdesc |= Addressing_Mode::RegIndOff16; // 16-bit offset
-            section_map.at(cur_sect.name).push_back(opdesc);
-            section_map.at(cur_sect.name).push_back(wordoff & 0xff); // little-endian
-            section_map.at(cur_sect.name).push_back(wordoff >> 8);
-            cur_sect.loc_cnt += 3;
+            push_byte(opdesc);
+            push_word(wordoff);
         }
         else
         {
@@ -1046,32 +1080,25 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             return false;
         }
         opdesc |= Addressing_Mode::RegIndOff16;
-        section_map.at(cur_sect.name).push_back(opdesc);
-        cur_sect.loc_cnt++;
-        if (symtab_map.count(token2) == 0)
-        {
-            cerr << "ERROR: Undefined reference to: \"" << token2 << "\"!\n";
-            return false;
-        }
-        Symtab_Entry entry = symtab_map.at(token2);
+        push_byte(opdesc);
+        Symtab_Entry entry;
+        if (!get_symtab_entry(token2, entry)) return false;
         if (entry.sym.st_shndx != SHN_ABS)
         {
             cerr << "ERROR: Relative symbol: \"" << token2 << "\" cannot be used as an offset for register indirect addressing!\n";
             return false;
         }
-        section_map.at(cur_sect.name).push_back(entry.sym.st_value & 0xff); // little-endian
-        section_map.at(cur_sect.name).push_back(entry.sym.st_value >> 8);
-        cur_sect.loc_cnt += 2;
+        push_byte(entry.sym.st_value & 0xff);
+        int16_t value = entry.sym.st_value;
+        if (value >= -128 && value <= 127) return true;
+        push_byte(entry.sym.st_value >> 8);
         return true;
     }
     else if (lexer->match_memsym(str, token1))
     {
         bool pcrel = token1[0] == '$';
-        if (pcrel) section_map.at(cur_sect.name).push_back(Addressing_Mode::RegIndOff16 | 7 << 1);
-        else section_map.at(cur_sect.name).push_back(Addressing_Mode::Mem);
-        cur_sect.loc_cnt++;
-        if (insert_reloc(pcrel ? token1.substr(1) : token1, pcrel ? R_VN_PC16 : R_VN_16, next_instr))
-            return true;
+        push_byte(pcrel ? Addressing_Mode::RegIndOff16 | 7 << 1 : Addressing_Mode::Mem);
+        if (insert_reloc(pcrel ? token1.substr(1) : token1, pcrel ? R_VN_PC16 : R_VN_16, next_instr)) return true;
     }
     else if (lexer->match_memabs(str, token1))
     {
@@ -1081,10 +1108,8 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             cerr << "ERROR: Invalid address: \"" << token1 << "\"!\n";
             return false;
         }
-        section_map.at(cur_sect.name).push_back(Addressing_Mode::Mem);
-        section_map.at(cur_sect.name).push_back(address & 0xff); // little-endian
-        section_map.at(cur_sect.name).push_back(address >> 8);
-        cur_sect.loc_cnt += 3;
+        push_byte(Addressing_Mode::Mem);
+        push_word(address);
         return true;
     }
     cerr << "ERROR: Invalid operand: \"" << str << "\"!\n";
@@ -1093,12 +1118,8 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
 
 bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr, bool place)
 {
-    if (symtab_map.count(symbol) == 0)
-    {
-        cerr << "ERROR: Undefined reference to: \"" << symbol << "\"!\n";
-        return false;
-    }
-    Symtab_Entry entry = symtab_map.at(symbol);
+    Symtab_Entry entry;
+    if (!get_symtab_entry(symbol, entry)) return false;
     Elf16_Word value;
     if (entry.sym.st_shndx == SHN_ABS)
     {
@@ -1120,8 +1141,6 @@ bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_A
         if (type == R_VN_PC16) value += cur_sect.loc_cnt + 1 - next_instr;
     }
     if (!place) return true;
-    section_map.at(cur_sect.name).push_back(value & 0xff); // little-endian
-    section_map.at(cur_sect.name).push_back(value >> 8);
-    cur_sect.loc_cnt += 2;
+    push_word(value);
     return true;
 }
