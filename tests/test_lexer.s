@@ -12,8 +12,12 @@ test2: .skip 0x43, 057
 .text
 .align 2, 057, 	 1 # first - alignment in B, second - fill value (0 = default - NOP), third - max fill in B (if more is needed then do not align)
 
-.GLOBAL MaIn
-.eXtERN printf, test, 		s2areage._est  # comment parsing
+#.GLOBAL MaIn g++ 6.2 which is the latest one that can be used in Ubuntu 12.04
+#             has inconsistent behaviour for the regex::icase flag, therefore
+#             all directives/instructions/operands/etc. are now case-sensitive!
+.global MaIn
+#.eXtERN printf, test, 		s2areage._est  # comment parsing
+.extern printf, test, 		s2areage._est  # comment parsing
 
    MaIn:    # 		test comment
 test3: mov	r0, &num	# 1 + 1 + 3 = 5B

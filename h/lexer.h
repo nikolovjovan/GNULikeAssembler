@@ -14,13 +14,13 @@
 #define REGEX_END "\\s*(?:[@#;].*)?\r?$"
 
 // Valid symbol format: starts with '.' or '_' or 'a-z' then can also contain digits
-#define REGEX_SYM "[._a-z][.\\w]*"
+#define REGEX_SYM "[._a-zA-Z][.\\w]*"
 
 // Valid byte value format
-#define REGEX_VAL_B "[-~]?(?:0b[0-1]{1,8}|0[0-7]{1,3}|0x[\\da-f]{1,2}|0|[1-9]\\d{0,2})"
+#define REGEX_VAL_B "[-~]?(?:0[bB][0-1]{1,8}|0[0-7]{1,3}|0[xX][\\da-fA-F]{1,2}|0|[1-9]\\d{0,2})"
 
 // Valid word value format
-#define REGEX_VAL_W "[-~]?(?:0b[0-1]{1,16}|0[0-7]{1,6}|0x[\\da-f]{1,4}|0|[1-9]\\d{0,4})"
+#define REGEX_VAL_W "[-~]?(?:0[bB][0-1]{1,16}|0[0-7]{1,6}|0[xX][\\da-fA-F]{1,4}|0|[1-9]\\d{0,4})"
 
 // Valid content format: anything until a comment
 #define REGEX_CONTENT "[^@#;]*?"
@@ -179,7 +179,7 @@ private:
             ")"
             REGEX_END
         },
-        expr_str = "^(\\s*(" REGEX_VAL_W "|" REGEX_SYM "|[\\(\\)\\+\\-\\*\\/%&|^])).*$";
+        expr_str = "^(\\s*(" REGEX_VAL_W "|" REGEX_SYM "|\\(|\\)|\\+|-|\\*|/|%|&|\\^)).*$";
 };
 
 #endif // lexer.h

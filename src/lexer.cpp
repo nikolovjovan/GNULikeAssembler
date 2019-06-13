@@ -8,28 +8,30 @@ using std::string;
 
 Lexer::Lexer()
 {
-    empty_rx.assign(empty_str, regex::icase | regex::optimize);
-    line_rx.assign(line_str, regex::icase | regex::optimize);
-    split_rx.assign(split_str, regex::icase | regex::optimize);
-    symbol_rx.assign(symbol_str, regex::icase | regex::optimize);
-    byte_rx.assign(byte_str, regex::icase | regex::optimize);
-    word_rx.assign(word_str, regex::icase | regex::optimize);
-    operand_1b_rx.assign(operand_1b_str, regex::icase | regex::optimize);
-    operand_2b_rx.assign(operand_2b_str, regex::icase | regex::optimize);
-    imm_b_rx.assign(imm_b_str, regex::icase | regex::optimize);
-    imm_w_rx.assign(imm_w_str, regex::icase | regex::optimize);
-    regdir_b_rx.assign(regdir_b_str, regex::icase | regex::optimize);
-    regdir_w_rx.assign(regdir_w_str, regex::icase | regex::optimize);
-    regind_rx.assign(regind_str, regex::icase | regex::optimize);
-    regindoff_rx.assign(regindoff_str, regex::icase | regex::optimize);
-    regindsym_rx.assign(regindsym_str, regex::icase | regex::optimize);
-    memsym_rx.assign(memsym_str, regex::icase | regex::optimize);
-    memabs_rx.assign(memabs_str, regex::icase | regex::optimize);
-    directive_rx.assign(directive_str, regex::icase | regex::optimize);
-    zeroaddr_rx.assign(zeroaddr_str, regex::icase | regex::optimize);
-    oneaddr_rx.assign(oneaddr_str, regex::icase | regex::optimize);
-    twoaddr_rx.assign(twoaddr_str, regex::icase | regex::optimize);
-    expr_rx.assign(expr_str, regex::icase | regex::optimize);
+    // g++ < 8.1 have a bug with regex::icase and that was messing it up...
+    // source: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=71500#c20
+    empty_rx.assign(empty_str, regex::optimize);
+    line_rx.assign(line_str, regex::optimize);
+    split_rx.assign(split_str, regex::optimize);
+    symbol_rx.assign(symbol_str, regex::optimize);
+    byte_rx.assign(byte_str, regex::optimize);
+    word_rx.assign(word_str, regex::optimize);
+    operand_1b_rx.assign(operand_1b_str, regex::optimize);
+    operand_2b_rx.assign(operand_2b_str, regex::optimize);
+    imm_b_rx.assign(imm_b_str, regex::optimize);
+    imm_w_rx.assign(imm_w_str, regex::optimize);
+    regdir_b_rx.assign(regdir_b_str, regex::optimize);
+    regdir_w_rx.assign(regdir_w_str, regex::optimize);
+    regind_rx.assign(regind_str, regex::optimize);
+    regindoff_rx.assign(regindoff_str, regex::optimize);
+    regindsym_rx.assign(regindsym_str, regex::optimize);
+    memsym_rx.assign(memsym_str, regex::optimize);
+    memabs_rx.assign(memabs_str, regex::optimize);
+    directive_rx.assign(directive_str, regex::optimize);
+    zeroaddr_rx.assign(zeroaddr_str, regex::optimize);
+    oneaddr_rx.assign(oneaddr_str, regex::optimize);
+    twoaddr_rx.assign(twoaddr_str, regex::optimize);
+    expr_rx.assign(expr_str, regex::optimize);
 }
 
 string Lexer::tolower(const string &str)
