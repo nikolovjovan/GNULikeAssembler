@@ -271,13 +271,16 @@ void Assembler::print_file(ostream &out)
             vector<Elf16_Half> &data = section_map[name];
             if (data.size() == 0) continue;
             out << "\nContents of section '" << name << "':\n";
+            out << setw(8) << setfill(' ') << " ";
+            for (unsigned i = 0; i < 0x10; ++i)
+                out << hex << i << ':' << (i + 1 < 0x10 ? ' ' : '\n');
             for (unsigned i = 0, offset = it->sh_offset & ~0xf; i < data.size();)
             {
                 out << "  " << setw(4) << setfill('0') << right << hex << offset << ": ";
                 for (; offset < it->sh_offset; ++offset) out << setw(1) << setfill(' ') << "   ";
-                for (; i < data.size() && ++offset % 0x10; ++i)
+                for (unsigned j = 0; i < data.size() && j < 0x10; ++i, ++j, ++offset)
                     out << setw(2) << setfill('0') << right << hex << (unsigned) data[i]
-                        << (((offset & 0xf) < 15 && i + 1 < data.size()) ? ' ' : '\n');
+                        << (j + 1 < 0x10 && i + 1 < data.size() ? ' ' : '\n');
             }
         }
         case SHT_SYMTAB:
