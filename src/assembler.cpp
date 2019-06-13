@@ -37,8 +37,8 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
     cur_sect.name           = "";
     cur_sect.type           = SHT_NULL;
     cur_sect.flags          = 0;
-    cur_sect.shdrtab_index  = 1;
     cur_sect.loc_cnt        = 0;
+    cur_sect.shdrtab_index  = 0;
 
     // Inserting a dummy symbol
     Symtab_Entry dummySym(0, 0, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_UNDEF);
@@ -73,8 +73,8 @@ bool Assembler::assemble()
     cur_sect.name = "";
     cur_sect.type = SHT_NULL;
     cur_sect.flags = 0;
-    cur_sect.shdrtab_index = 0;
     cur_sect.loc_cnt = 0;
+    cur_sect.shdrtab_index = 0;
     lc_map.clear();
 
     if (!run_second_pass())
@@ -271,9 +271,14 @@ void Assembler::print_file(ostream &out)
             vector<Elf16_Half> &data = section_map[name];
             if (data.size() == 0) continue;
             out << "\nContents of section '" << name << "':\n";
-            for (unsigned i = 0; i < data.size(); ++i)
-                out << setw(2) << setfill('0') << right << hex << (unsigned) data[i]
-                    << (((i + 1) % 20 && (i + 1) < data.size()) ? ' ' : '\n');
+            for (unsigned i = 0, offset = it->sh_offset & ~0xf; i < data.size();)
+            {
+                out << "  " << setw(4) << setfill('0') << right << hex << offset << ": ";
+                for (; offset < it->sh_offset; ++offset) out << setw(1) << setfill(' ') << "   ";
+                for (; i < data.size() && ++offset % 0x10; ++i)
+                    out << setw(2) << setfill('0') << right << hex << (unsigned) data[i]
+                        << (((offset & 0xf) < 15 && i + 1 < data.size()) ? ' ' : '\n');
+            }
         }
         case SHT_SYMTAB:
         {
@@ -568,10 +573,13 @@ Result Assembler::process_directive(const Directive &dir)
             add_shdr(name, sh_type, sh_flags);
             section_map[cur_sect.name]; // initialize an empty section vector
         }
-
-        cur_sect.type = shdrtab_map.at(cur_sect.name).shdr.sh_type;
-        cur_sect.flags = shdrtab_map.at(cur_sect.name).shdr.sh_flags;
-        cur_sect.shdrtab_index = shdrtab_map.at(cur_sect.name).index;
+        else
+        {
+            Shdrtab_Entry &entry    = shdrtab_map.at(cur_sect.name);
+            cur_sect.type           = entry.shdr.sh_type;
+            cur_sect.flags          = entry.shdr.sh_flags;
+            cur_sect.shdrtab_index  = entry.index;
+        }
 
         return Result::Success;
     }
@@ -916,16 +924,20 @@ bool Assembler::add_symbol(const string &symbol)
 
 bool Assembler::add_shdr(const string &name, Elf16_Word type, Elf16_Word flags, bool reloc, Elf16_Word info, Elf16_Word entsize)
 {
-    if (!reloc)
-        if (!add_symbol(cur_sect.name))
-            return false;
-
     if (shdrtab_map.count(name) > 0)
         return true;
 
     Shdrtab_Entry entry(type, flags, info, entsize);
     shdrtab_map.insert(shdrtab_pair_t(name, entry));
     shstrtab_vect.push_back(name);
+
+    if (!reloc)
+    {
+        cur_sect.type           = entry.shdr.sh_type;
+        cur_sect.flags          = entry.shdr.sh_flags;
+        cur_sect.shdrtab_index  = entry.index;
+        if (!add_symbol(cur_sect.name)) return false;
+    }
 
     return true;
 }
@@ -1132,13 +1144,18 @@ bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_A
     }
     else
     {
-        string relshdr = ".rel" + cur_sect.name;
-        add_shdr(relshdr, SHT_REL, SHF_INFO_LINK, true, shdrtab_map.at(cur_sect.name).index, sizeof(Elf16_Rel));
         bool global = ELF16_ST_BIND(entry.sym.st_info) == STB_GLOBAL;
-        reltab_map[cur_sect.name].push_back(Reltab_Entry(ELF16_R_INFO(global ? entry.index : symtab_map.at(shstrtab_vect[entry.sym.st_shndx]).index, type), cur_sect.loc_cnt + 1));
-        shdrtab_map.at(relshdr).shdr.sh_size += sizeof(Elf16_Rel);
-        value = global ? 0 : entry.sym.st_value;
-        if (type == R_VN_PC16) value += cur_sect.loc_cnt + 1 - next_instr;
+        if (type == R_VN_PC16 && !global && entry.sym.st_shndx == cur_sect.shdrtab_index)
+            value = entry.sym.st_value - next_instr;
+        else
+        {
+            string relshdr = ".rel" + cur_sect.name;
+            add_shdr(relshdr, SHT_REL, SHF_INFO_LINK, true, shdrtab_map.at(cur_sect.name).index, sizeof(Elf16_Rel));
+            reltab_map[cur_sect.name].push_back(Reltab_Entry(ELF16_R_INFO(global ? entry.index : symtab_map.at(shstrtab_vect[entry.sym.st_shndx]).index, type), cur_sect.loc_cnt));
+            shdrtab_map.at(relshdr).shdr.sh_size += sizeof(Elf16_Rel);
+            value = global ? 0 : entry.sym.st_value;
+            if (type == R_VN_PC16) value += cur_sect.loc_cnt - next_instr;
+        }
     }
     if (!place) return true;
     push_word(value);

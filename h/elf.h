@@ -193,9 +193,9 @@ typedef struct elf16_rel
 
 // How to extract and insert information held in the r_info field
 
-#define ELF16_R_SYM(val)        ((val) >> 8)
-#define ELF16_R_TYPE(val)       ((val) & 0xff)
-#define ELF16_R_INFO(sym, type) (((sym) << 8) + ((type) & 0xff))
+#define ELF16_R_SYM(val)        ((val) >> 4)
+#define ELF16_R_TYPE(val)       ((val) & 0xf)
+#define ELF16_R_INFO(sym, type) (((sym) << 4) + ((type) & 0xf))
 
 // Program segment header
 
