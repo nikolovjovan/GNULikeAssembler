@@ -30,7 +30,7 @@ Symtab_Entry::Symtab_Entry(Elf16_Word name, Elf16_Addr value, uint8_t info, Elf1
     : index(symtab_index++), is_equ(is_equ)
 {
     sym.st_name     = name;     // String table index
-    sym.st_value    = value;    // Symbol value = 1* label - current location counter, 2* constant - .equ value
+    sym.st_value    = value;    // Symbol value
     sym.st_size     = 0;        // Symbol size
     sym.st_info     = info;     // Symbol type and binding
     sym.st_other    = 0;        // No defined meaning, 0
@@ -626,11 +626,14 @@ Result Assembler::process_directive(const Directive &dir)
         if (symtab_map.count(symbol) > 0)
         {
             Symtab_Entry &entry = symtab_map.at(symbol);
-            if (dir.code == Directive::Set || entry.sym.st_value == 0
-                && entry.sym.st_shndx == SHN_UNDEF
-                && entry.sym.st_info == ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE))
+            if (dir.code == Directive::Set || entry.sym.st_info == ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE)
+                && entry.sym.st_shndx == SHN_UNDEF && entry.sym.st_value == 0)
             {
                 Symtab_Entry &entry = symtab_map.at(symbol);
+                entry.sym.st_info = ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE);
+                entry.sym.st_shndx = SHN_UNDEF;
+                entry.sym.st_value = value;
+                entry.is_equ = true;
                 if (res == Result::Success && entry.sym.st_shndx == SHN_UNDEF)
                 {
                     entry.sym.st_shndx = SHN_ABS;
@@ -638,13 +641,7 @@ Result Assembler::process_directive(const Directive &dir)
                     if (equ_reloc_map.count(symbol) > 0) equ_reloc_map.erase(symbol);
                 }
                 else if (res == Result::Uneval)
-                {
-                    entry.sym.st_shndx = SHN_UNDEF;
                     equ_uneval_map.emplace(equ_uneval_pair_t(symbol, std::move(expr)));
-                }
-                else if (res == Result::Reloc) entry.sym.st_shndx = SHN_UNDEF;
-                entry.sym.st_info = ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE);
-                entry.sym.st_value = value;
             }
             else
             {
@@ -1113,9 +1110,10 @@ bool Assembler::add_symbol(const string &symbol)
         if (entry.sym.st_value == 0 && entry.sym.st_shndx == SHN_UNDEF
             && entry.sym.st_info == ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE))
         {   // extern global symbol
-            entry.sym.st_value = cur_sect.loc_cnt;
-            entry.sym.st_shndx = cur_sect.shdrtab_index;
+            entry.is_equ = false;
             entry.sym.st_info = ELF16_ST_INFO(STB_LOCAL, type);
+            entry.sym.st_shndx = cur_sect.shdrtab_index;
+            entry.sym.st_value = cur_sect.loc_cnt;
             return true;
         }
         else
