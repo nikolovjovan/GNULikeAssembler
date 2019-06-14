@@ -18,6 +18,7 @@ using std::setfill;
 using std::setw;
 using std::stack;
 using std::string;
+using std::unique_ptr;
 using std::vector;
 
 Elf16_Addr Symtab_Entry::symtab_index   = 0;
@@ -43,7 +44,6 @@ Assembler::Assembler(const string &input_file, const string &output_file, bool b
     // Inserting a dummy symbol
     Symtab_Entry dummySym(0, 0, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_UNDEF);
     symtab_map.insert(symtab_pair_t("", dummySym));
-    symtab_vect.push_back(dummySym.sym);
     strtab_vect.push_back("");
 
     // Inserting a dummy section header
@@ -76,6 +76,8 @@ bool Assembler::assemble()
     cur_sect.loc_cnt = 0;
     cur_sect.shdrtab_index = 0;
     lc_map.clear();
+
+    if (!evaluate_expressions()) return false;
 
     if (!run_second_pass())
     {
@@ -157,6 +159,36 @@ bool Assembler::run_second_pass()
     return res;
 }
 
+bool Assembler::evaluate_expressions()
+{
+    Result res;
+    int value;
+    for (auto it = equ_uneval_map.begin(); it != equ_uneval_map.end(); ++it)
+    {
+        res = process_expression(*(it->second), value, false, false);
+        if (res == Result::Error || res == Result::Uneval)
+        {
+            cerr << "ERROR: Failed to evaluate expression for .equ symbol '" << it->first << "'!\n";
+            return false;
+        }
+        else if (res == Result::Reloc)
+            equ_reloc_map.emplace(expr_pair_t(it->first, std::move(it->second)));
+        else
+        {
+            if (symtab_map.count(it->first) == 0)
+            {   // should never happen
+                cerr << "ERROR: Assembler error: Unevaluated .equ symbol '" << it->first << "' is undefined!\n";
+                return false;
+            }
+            Symtab_Entry &entry = symtab_map.at(it->first);
+            entry.sym.st_shndx = SHN_ABS;
+            entry.sym.st_value = value;
+        }
+    }
+    equ_uneval_map.clear();
+    return true;
+}
+
 void Assembler::print_line(Line_Info &info)
 {
     cout << info.line_num << ":\t";
@@ -231,9 +263,9 @@ void Assembler::print_file(ostream &out)
     for (unsigned i = 0; i < shdrtab_vect.size(); ++i)
     {
         out << "  [" << dec << setw(2) << setfill(' ') << right << i << "] ";
-        out << setw(20) << setfill(' ') << left << shstrtab_vect[shdrtab_vect[i].sh_name] << ' ';
+        out << setw(20) << setfill(' ') << left << get_section_name(shdrtab_vect[i]->sh_name) << ' ';
         out << setw(20) << setfill(' ') << left;
-        switch (shdrtab_vect[i].sh_type)
+        switch (shdrtab_vect[i]->sh_type)
         {
         case SHT_NULL: out << "NULL"; break;
         case SHT_PROGBITS: out << "PROGBITS"; break;
@@ -244,26 +276,26 @@ void Assembler::print_file(ostream &out)
         default: out << "UNKNOWN"; break;
         }
         out << ' ';
-        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_addr << "      ";
-        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_offset << "\n       ";
-        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_size << "      ";
-        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i].sh_entsize << "       ";
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i]->sh_addr << "      ";
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i]->sh_offset << "\n       ";
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i]->sh_size << "      ";
+        out << setw(4) << setfill('0') << right << hex << (unsigned) shdrtab_vect[i]->sh_entsize << "       ";
         flags.clear();
-        if (shdrtab_vect[i].sh_flags & SHF_WRITE) flags.push_back('W');
-        if (shdrtab_vect[i].sh_flags & SHF_ALLOC) flags.push_back('A');
-        if (shdrtab_vect[i].sh_flags & SHF_EXECINSTR) flags.push_back('X');
-        if (shdrtab_vect[i].sh_flags & SHF_INFO_LINK) flags.push_back('I');
+        if (shdrtab_vect[i]->sh_flags & SHF_WRITE) flags.push_back('W');
+        if (shdrtab_vect[i]->sh_flags & SHF_ALLOC) flags.push_back('A');
+        if (shdrtab_vect[i]->sh_flags & SHF_EXECINSTR) flags.push_back('X');
+        if (shdrtab_vect[i]->sh_flags & SHF_INFO_LINK) flags.push_back('I');
         out << setw(7) << setfill(' ') << left << flags;
-        out << setw(7) << setfill(' ') << left << dec << (unsigned) shdrtab_vect[i].sh_link;
-        out << setw(7) << setfill(' ') << left << dec << (unsigned) shdrtab_vect[i].sh_info;
-        out << left << dec << (shdrtab_vect[i].sh_addralign == 0 ? 1 : 2 << shdrtab_vect[i].sh_addralign - 1) << '\n';
+        out << setw(7) << setfill(' ') << left << dec << (unsigned) shdrtab_vect[i]->sh_link;
+        out << setw(7) << setfill(' ') << left << dec << (unsigned) shdrtab_vect[i]->sh_info;
+        out << left << dec << (shdrtab_vect[i]->sh_addralign == 0 ? 1 : 2 << shdrtab_vect[i]->sh_addralign - 1) << '\n';
     }
     out << "Key to Flags:\n  W (write), A (alloc), X (execute), I (info)\n";
 
     for (auto it = shdrtab_vect.begin(); it != shdrtab_vect.end(); ++it)
     {
-        string name = shstrtab_vect[it->sh_name];
-        switch (it->sh_type)
+        string name = shstrtab_vect[(*it)->sh_name];
+        switch ((*it)->sh_type)
         {
         case SHT_NULL: break;   // Only section header, no data
         case SHT_PROGBITS:
@@ -274,10 +306,10 @@ void Assembler::print_file(ostream &out)
             out << setw(8) << setfill(' ') << " ";
             for (unsigned i = 0; i < 0x10; ++i)
                 out << hex << i << ':' << (i + 1 < 0x10 ? ' ' : '\n');
-            for (unsigned i = 0, offset = it->sh_offset & ~0xf; i < data.size();)
+            for (unsigned i = 0, offset = (*it)->sh_offset & ~0xf; i < data.size();)
             {
                 out << "  " << setw(4) << setfill('0') << right << hex << offset << ": ";
-                for (; offset < it->sh_offset; ++offset) out << setw(1) << setfill(' ') << "   ";
+                for (; offset < (*it)->sh_offset; ++offset) out << setw(1) << setfill(' ') << "   ";
                 for (unsigned j = 0; i < data.size() && j < 0x10; ++i, ++j, ++offset)
                     out << setw(2) << setfill('0') << right << hex << (unsigned) data[i]
                         << (j + 1 < 0x10 && i + 1 < data.size() ? ' ' : '\n');
@@ -291,10 +323,10 @@ void Assembler::print_file(ostream &out)
             for (unsigned i = 0; i < symtab_vect.size(); ++i)
             {
                 out << setw(5) << setfill(' ') << right << i << ": ";
-                out << setw(4) << setfill('0') << right << hex << (unsigned) symtab_vect[i].st_value << "   ";
-                out << setw(7) << setfill(' ') << left << dec << (unsigned) symtab_vect[i].st_size;
+                out << setw(4) << setfill('0') << right << hex << (unsigned) symtab_vect[i]->st_value << "   ";
+                out << setw(7) << setfill(' ') << left << dec << (unsigned) symtab_vect[i]->st_size;
                 out << setw(11) << setfill(' ') << left;
-                switch (ELF16_ST_TYPE(symtab_vect[i].st_info))
+                switch (ELF16_ST_TYPE(symtab_vect[i]->st_info))
                 {
                 case STT_NOTYPE: out << "NOTYPE"; break;
                 case STT_OBJECT: out << "OBJECT"; break;
@@ -304,7 +336,7 @@ void Assembler::print_file(ostream &out)
                 default: out << "unknown"; break;
                 }
                 out << setw(11) << setfill(' ') << left;
-                switch (ELF16_ST_BIND(symtab_vect[i].st_info))
+                switch (ELF16_ST_BIND(symtab_vect[i]->st_info))
                 {
                 case STB_LOCAL: out << "LOCAL"; break;
                 case STB_GLOBAL: out << "GLOBAL"; break;
@@ -312,13 +344,13 @@ void Assembler::print_file(ostream &out)
                 default: out << "unknown"; break;
                 }
                 out << setw(5) << setfill(' ') << left << dec;
-                if (symtab_vect[i].st_shndx == SHN_UNDEF)
+                if (symtab_vect[i]->st_shndx == SHN_UNDEF)
                     out << "UND";
-                else if (symtab_vect[i].st_shndx == SHN_ABS)
+                else if (symtab_vect[i]->st_shndx == SHN_ABS)
                     out << "ABS";
                 else
-                    out << (unsigned) symtab_vect[i].st_shndx;
-                out << strtab_vect[symtab_vect[i].st_name];
+                    out << (unsigned) symtab_vect[i]->st_shndx;
+                out << strtab_vect[symtab_vect[i]->st_name];
                 out << '\n';
             }
             break;
@@ -328,13 +360,13 @@ void Assembler::print_file(ostream &out)
             if (name == ".strtab")
             {
                 out << "\nString table '.strtab' contains " << strtab_vect.size() << " entries:\n";
-                for (unsigned i = 0, offset = it->sh_offset; i < strtab_vect.size(); offset += (strtab_vect[i++].length() + 1))
+                for (unsigned i = 0, offset = (*it)->sh_offset; i < strtab_vect.size(); offset += (strtab_vect[i++].length() + 1))
                     out << "  " << setw(4) << setfill('0') << right << hex << offset << ": " << strtab_vect[i] << '\n';
             }
             else if (name == ".shstrtab")
             {
                 out << "\nString table '.shstrtab' contains " << shstrtab_vect.size() << " entries:\n";
-                for (unsigned i = 0, offset = it->sh_offset; i < shstrtab_vect.size(); offset += (shstrtab_vect[i++].length() + 1))
+                for (unsigned i = 0, offset = (*it)->sh_offset; i < shstrtab_vect.size(); offset += (shstrtab_vect[i++].length() + 1))
                     out << "  " << setw(4) << setfill('0') << right << hex << offset << ": " << shstrtab_vect[i] << '\n';
             }
             break;
@@ -342,7 +374,7 @@ void Assembler::print_file(ostream &out)
         case SHT_NOBITS: break; // Only section header, uninitialized data
         case SHT_REL:
         {
-            out << "\nRelocation section '" << name << "' contains " << (unsigned) (it->sh_size / it->sh_entsize) << " entries:\n"
+            out << "\nRelocation section '" << name << "' contains " << (unsigned) ((*it)->sh_size / (*it)->sh_entsize) << " entries:\n"
                 << "  Offset  Info  Type       Section              Symbol\n";
             vector<Reltab_Entry> &reloc = reltab_map[name.substr(4)];
             for (unsigned i = 0; i < reloc.size(); ++i)
@@ -356,10 +388,10 @@ void Assembler::print_file(ostream &out)
                 case R_VN_PC16: out << "R_VN_PC_16"; break;
                 default: out << "unknown"; break;
                 }
-                Elf16_Sym sym = symtab_vect[ELF16_R_SYM(reloc[i].rel.r_info)];
-                bool is_section = ELF16_ST_TYPE(sym.st_info) == STT_SECTION;
-                if (is_section) out << left << shstrtab_vect[sym.st_shndx];
-                else out << "                     " << strtab_vect[sym.st_name];
+                Elf16_Sym *sym = symtab_vect[ELF16_R_SYM(reloc[i].rel.r_info)];
+                bool is_section = ELF16_ST_TYPE(sym->st_info) == STT_SECTION;
+                if (is_section) out << left << shstrtab_vect[sym->st_shndx];
+                else out << "                     " << strtab_vect[sym->st_name];
                 out << '\n';
             }
             break;
@@ -389,16 +421,22 @@ void Assembler::finalize()
     shdrtab_map.insert(shdrtab_pair_t(".shstrtab", shstrtab_entry));
     shstrtab_vect.push_back(".shstrtab");
 
+    // Generate symbol header table
+    if (symtab_vect.capacity() < Symtab_Entry::symtab_index)
+        symtab_vect.resize(Symtab_Entry::symtab_index);
+    for (auto it = symtab_map.begin(); it != symtab_map.end(); ++it)
+        symtab_vect[it->second.index] = &(it->second.sym);
+
     // Generate section header table
     if (shdrtab_vect.capacity() < Shdrtab_Entry::shdrtab_index)
         shdrtab_vect.resize(Shdrtab_Entry::shdrtab_index);
     for (auto it = shdrtab_map.begin(); it != shdrtab_map.end(); ++it)
-        shdrtab_vect[it->second.index] = it->second.shdr;
+        shdrtab_vect[it->second.index] = &(it->second.shdr);
 
     // Link relocation tables to the symbol table
     for (unsigned i = 0; i < shdrtab_vect.size(); ++i)
-        if (shdrtab_vect[i].sh_type == SHT_REL)
-            shdrtab_vect[i].sh_link = symtab_entry.index;
+        if (shdrtab_vect[i]->sh_type == SHT_REL)
+            shdrtab_vect[i]->sh_link = symtab_entry.index;
 
     // ELF Header
     elf_header.e_ident[EI_MAG0]     = ELFMAG0;
@@ -443,23 +481,27 @@ void Assembler::write_output()
 
 Result Assembler::process_line(Line_Info &info)
 {
-    info.loc_cnt = cur_sect.loc_cnt;
-    if (info.line.label.empty() && info.line.content_type == Content_Type::None)
-        return Result::Success; // empty line, skip
-    if (pass == Pass::First)
-        file_vect.push_back(info);
-    if (!info.line.label.empty())
+    Result res = Result::Success;
+    if (!info.line.label.empty() || info.line.content_type != Content_Type::None)
     {
-        if (pass == Pass::First)
+        if (!info.line.label.empty() && pass == Pass::First)
             if (!add_symbol(info.line.label))
                 return Result::Error;
-        if (info.line.content_type == Content_Type::None)
-            return Result::Success;
+        if (info.line.content_type == Content_Type::Directive)
+        {
+            if ((res = process_directive(info.line.getDir())) == Result::Error)
+                return Result::Error;
+        }
+        else if (info.line.content_type == Content_Type::Instruction)
+        {
+            if ((res = process_instruction(info.line.getInstr())) == Result::Error)
+                return Result::Error;
+        }
+        info.loc_cnt = cur_sect.loc_cnt;
+        if (pass == Pass::First)
+            file_vect.push_back(info);
     }
-    if (info.line.content_type == Content_Type::Directive)
-        return process_directive(info.line.getDir());
-    else
-        return process_instruction(info.line.getInstr());
+    return res;
 }
 
 Result Assembler::process_directive(const Directive &dir)
@@ -467,7 +509,6 @@ Result Assembler::process_directive(const Directive &dir)
     switch (dir.code)
     {
     case Directive::Global:
-    case Directive::Extern:
     {
         if (pass == Pass::First) return Result::Success;
         string symbol;
@@ -481,15 +522,33 @@ Result Assembler::process_directive(const Directive &dir)
                 }
                 else
                 {
-                    strtab_vect.push_back(symbol);
-                    Symtab_Entry entry(strtab_vect.size() - 1, 0, ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE), SHN_UNDEF);
-                    symtab_map.insert(symtab_pair_t(symbol, entry));
-                    symtab_vect.push_back(entry.sym);
+                    cerr << "ERROR: Global symbol '" << token << "' is undefined!\n";
+                    return Result::Error;
                 }
             }
             else
             {
-                cerr << "ERROR: Invalid symbol \"" << token << "\"!";
+                cerr << "ERROR: Invalid symbol '" << token << "'!\n";
+                return Result::Error;
+            }
+        return Result::Success;
+    }
+    case Directive::Extern:
+    {
+        if (pass == Pass::Second) return Result::Success;
+        string symbol;
+        for (string token : lexer->split_string(dir.p1))
+            if (lexer->match_symbol(token, symbol))
+            {
+                // If the symbol is already defined, ignore this directive
+                if (symtab_map.count(symbol) > 0) continue;
+                strtab_vect.push_back(symbol);
+                Symtab_Entry entry(strtab_vect.size() - 1, 0, ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE), SHN_UNDEF);
+                symtab_map.insert(symtab_pair_t(symbol, entry));
+            }
+            else
+            {
+                cerr << "ERROR: Invalid symbol '" << token << "'!\n";
                 return Result::Error;
             }
         return Result::Success;
@@ -499,33 +558,55 @@ Result Assembler::process_directive(const Directive &dir)
     {
         if (pass == Pass::Second) return Result::Success;
         string symbol = dir.p1;
-        Expression expr;
-        if (!parser->parse_expression(dir.p2, expr))
+        unique_ptr<Expression> expr(new Expression());
+        if (!parser->parse_expression(dir.p2, *expr))
         {
-            cerr << "ERROR: Failed to parse expression: \"" << dir.p2 << "\"!\n";
+            cerr << "ERROR: Failed to parse expression: '" << dir.p2 << "'!\n";
             return Result::Error;
         }
         int value;
-        if (process_expression(expr, value, false) == Result::Error)
+        Result res;
+        if ((res = process_expression(*expr, value, true, false)) == Result::Error)
         {
-            cerr << "ERROR: Invalid expression: \"" << dir.p2 <<"\"!\n";
+            cerr << "ERROR: Invalid expression: '" << dir.p2 <<"'!\n";
             return Result::Error;
         }
         if (symtab_map.count(symbol) > 0)
         {
-            if (dir.code == Directive::Set) symtab_map.at(symbol).sym.st_value = value;
+            if (dir.code == Directive::Set)
+            {
+                Symtab_Entry &entry = symtab_map.at(symbol);
+                if (res == Result::Uneval)
+                {
+                    entry.sym.st_shndx = SHN_UNDEF;
+                    equ_uneval_map.emplace(expr_pair_t(symbol, std::move(expr)));
+                }
+                else if (res == Result::Reloc)
+                {
+                    entry.sym.st_shndx = SHN_UNDEF;
+                    equ_reloc_map.emplace(expr_pair_t(symbol, std::move(expr)));
+                }
+                else if (entry.sym.st_shndx == SHN_UNDEF)
+                {
+                    entry.sym.st_shndx = SHN_ABS;
+                    if (equ_uneval_map.count(symbol) > 0) equ_uneval_map.erase(symbol);
+                    if (equ_reloc_map.count(symbol) > 0) equ_reloc_map.erase(symbol);
+                }
+                entry.sym.st_value = value;
+            }
             else
             {
-                cerr << "ERROR: Symbol \"" << symbol << "\" already in use!\n";
+                cerr << "ERROR: Symbol '" << symbol << "' already in use!\n";
                 return Result::Error;
             }
         }
         else
         {
             strtab_vect.push_back(symbol);
-            Symtab_Entry entry(strtab_vect.size() - 1, value, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), SHN_ABS);
+            Symtab_Entry entry(strtab_vect.size() - 1, value, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), res != Result::Success ? SHN_UNDEF : SHN_ABS, true);
             symtab_map.insert(symtab_pair_t(symbol, entry));
-            symtab_vect.push_back(entry.sym);
+            if (res == Result::Uneval) equ_uneval_map.emplace(expr_pair_t(symbol, std::move(expr)));
+            else if (res == Result::Reloc) equ_reloc_map.emplace(expr_pair_t(symbol, std::move(expr)));
         }
         return Result::Success;
     }
@@ -559,7 +640,7 @@ Result Assembler::process_directive(const Directive &dir)
                 else if (name == ".text") sh_flags |= SHF_EXECINSTR;
                 else if (name != ".rodata") // .rodata has only flags SHF_ALLOC which are set above
                 {
-                    cerr << "ERROR: Cannot infer section type and flags from section name: \"" << name << "\"\n";
+                    cerr << "ERROR: Cannot infer section type and flags from section name: '" << name << "'\n";
                     return Result::Error;
                 }
                 
@@ -602,13 +683,13 @@ Result Assembler::process_directive(const Directive &dir)
                 Expression expr;
                 if (!parser->parse_expression(token, expr))
                 {
-                    cerr << "ERROR: Failed to parse expression: \"" << token << "\"!\n";
+                    cerr << "ERROR: Failed to parse expression: '" << token << "'!\n";
                     return Result::Error;
                 }
                 int value;
-                if (process_expression(expr, value) == Result::Error)
+                if (process_expression(expr, value, false, true) != Result::Success)
                 {
-                    cerr << "ERROR: Invalid expression: \"" << token <<"\"!\n";
+                    cerr << "ERROR: Invalid expression: '" << token <<"'!\n";
                     return Result::Error;
                 }
                 if (cur_sect.type == SHT_NOBITS && value != 0)
@@ -630,13 +711,13 @@ Result Assembler::process_directive(const Directive &dir)
                 Expression expr;
                 if (!parser->parse_expression(token, expr))
                 {
-                    cerr << "ERROR: Failed to parse expression: \"" << token << "\"!\n";
+                    cerr << "ERROR: Failed to parse expression: '" << token << "'!\n";
                     return Result::Error;
                 }
                 int value;
-                if (process_expression(expr, value) == Result::Error)
+                if (process_expression(expr, value, false, true) != Result::Success)
                 {
-                    cerr << "ERROR: Invalid expression: \"" << token <<"\"!\n";
+                    cerr << "ERROR: Invalid expression: '" << token <<"'!\n";
                     return Result::Error;
                 }
                 if (cur_sect.type == SHT_NOBITS && value != 0)
@@ -659,21 +740,21 @@ Result Assembler::process_directive(const Directive &dir)
         Elf16_Half alignment;
         if (!parser->decode_byte(dir.p1, alignment))
         {
-            cerr << "ERROR: Failed to decode: \"" << dir.p1 << "\" as a byte value!\n";
+            cerr << "ERROR: Failed to decode: '" << dir.p1 << "' as a byte value!\n";
             return Result::Error;
         }
         Elf16_Half fill;
         if (dir.p2 == "") fill = 0x00;
         else if (!parser->decode_byte(dir.p2, fill))
         {
-            cerr << "ERROR: Failed to decode: \"" << dir.p2 << "\" as a byte value!\n";
+            cerr << "ERROR: Failed to decode: '" << dir.p2 << "' as a byte value!\n";
             return Result::Error;
         }
         Elf16_Half max;
         if (dir.p3 == "") max = alignment;
         else if (!parser->decode_byte(dir.p3, max))
         {
-            cerr << "ERROR: Failed to decode: \"" << dir.p3 << "\" as a byte value!\n";
+            cerr << "ERROR: Failed to decode: '" << dir.p3 << "' as a byte value!\n";
             return Result::Error;
         }
         if (!alignment || alignment & (alignment - 1))
@@ -705,14 +786,14 @@ Result Assembler::process_directive(const Directive &dir)
         Elf16_Half size;
         if (!parser->decode_byte(dir.p1, size))
         {
-            cerr << "ERROR: Failed to decode: \"" << dir.p1 << "\" as a byte value!\n";
+            cerr << "ERROR: Failed to decode: '" << dir.p1 << "' as a byte value!\n";
             return Result::Error;
         }
         Elf16_Half fill;
         if (dir.p2 == "") fill = 0x00;
         else if (!parser->decode_byte(dir.p2, fill))
         {
-            cerr << "ERROR: Failed to decode: \"" << dir.p2 << "\" as a byte value!\n";
+            cerr << "ERROR: Failed to decode: '" << dir.p2 << "' as a byte value!\n";
             return Result::Error;
         }
         if (pass == Pass::First) cur_sect.loc_cnt += size;
@@ -727,7 +808,7 @@ Result Assembler::process_instruction(const Instruction &instr)
 {
     if (!(cur_sect.flags & SHF_EXECINSTR))
     {
-        cerr << "ERROR: Code in unexecutable section: \"" << cur_sect.name << "\"!\n";
+        cerr << "ERROR: Code in unexecutable section: '" << cur_sect.name << "'!\n";
         return Result::Error;
     }
     if (instr.op_cnt == 0)
@@ -772,9 +853,9 @@ Result Assembler::process_instruction(const Instruction &instr)
     return Result::Error;
 }
 
-Result Assembler::process_expression(const Expression &expr, int &value, bool allow_reloc)
+Result Assembler::process_expression(const Expression &expr, int &value, bool allow_undef, bool do_reloc)
 {
-    typedef pair<int, int> operand_t; // Operand : { value, class_index (0 - absolute, 1 - relative) }
+    typedef struct { int value, clidx, shndx; } operand_t; // clidx: 0 = ABS, 1 = REL, other = INVALID
     typedef Operator_Token operator_t;
     stack<operand_t> values;
     stack<operator_t> ops;
@@ -799,7 +880,19 @@ Result Assembler::process_expression(const Expression &expr, int &value, bool al
                     values.pop();
                     Operator_Token oper = ops.top();
                     ops.pop();
-                    values.push(operand_t(oper.calculate(val1.first, val2.first), oper.get_class_index(val1.second, val2.second)));
+                    operand_t result;
+                    result.shndx = oper.get_st_shndx(val1.shndx, val2.shndx);
+                    // Any bad combination of operator, val1 section id, val2 section id
+                    // returns -1 which means its incompatible!
+                    if (result.shndx == -1)
+                    {
+                        cerr << "ERROR: Invalid operands (*" << get_section_name(val1.shndx) << "* and *"
+                                << get_section_name(val2.shndx) << "* sections) for operator '" << oper.get_symbol() << "'!\n";
+                        return Result::Error;
+                    }
+                    result.clidx = oper.get_clidx(val1.clidx, val2.clidx);
+                    result.value = oper.calculate(val1.value, val2.value);
+                    values.push(result);
                     rank--;
                     if (rank < 1) return Result::Error;
                 }
@@ -812,15 +905,27 @@ Result Assembler::process_expression(const Expression &expr, int &value, bool al
         else if (token->type == Expression_Token::Number)
         {
             auto &num = static_cast<Number_Token&>(*token);
-            values.push(operand_t(num.value, 0)); // absolute value
+            operand_t op;
+            op.value = num.value;
+            op.clidx = 0; // absolute value
+            op.shndx = SHN_ABS; // absolute value
+            values.push(op);
             rank++;
         }
         else
         {
             auto &sym = static_cast<Symbol_Token&>(*token);
             Symtab_Entry entry;
-            if (!get_symtab_entry(sym.name, entry)) return Result::Error;
-            values.push(operand_t((ELF16_ST_BIND(entry.sym.st_info) == STB_LOCAL ? entry.sym.st_value : 0), (entry.sym.st_shndx == SHN_ABS ? 0 : 1)));
+            if (!get_symtab_entry(sym.name, entry, allow_undef))
+            {
+                if (allow_undef) return Result::Uneval;
+                return Result::Error;
+            }
+            operand_t op;
+            op.value = ELF16_ST_BIND(entry.sym.st_info) == STB_LOCAL ? entry.sym.st_value : 0;
+            op.clidx = (entry.sym.st_shndx == SHN_ABS ? 0 : 1);
+            op.shndx = entry.sym.st_shndx;
+            values.push(op);
             rank++;
         }
     }
@@ -832,7 +937,19 @@ Result Assembler::process_expression(const Expression &expr, int &value, bool al
         values.pop();
         Operator_Token oper = ops.top();
         ops.pop();
-        values.push(operand_t(oper.calculate(val1.first, val2.first), oper.get_class_index(val1.second, val2.second)));
+        operand_t result;
+        result.shndx = oper.get_st_shndx(val1.shndx, val2.shndx);
+        // Any bad combination of operator, val1 section id, val2 section id
+        // returns -1 which means its incompatible!
+        if (result.shndx == -1)
+        {
+            cerr << "ERROR: Invalid operands (*" << get_section_name(val1.shndx) << "* and *"
+                    << get_section_name(val2.shndx) << "* sections) for operator '" << oper.get_symbol() << "'!\n";
+            return Result::Error;
+        }
+        result.clidx = oper.get_clidx(val1.clidx, val2.clidx);
+        result.value = oper.calculate(val1.value, val2.value);
+        values.push(result);
         rank--;
     }
     if (rank != 1)
@@ -842,43 +959,53 @@ Result Assembler::process_expression(const Expression &expr, int &value, bool al
     }
     operand_t result = values.top();
     values.pop();
-    if (result.second == 0) value = result.first;
-    else if (result.second == 1)
+    if (result.clidx == 0) value = result.value;
+    else if (result.clidx == 1)
     {
-        if (!allow_reloc)
+        if (do_reloc)
         {
-            cerr << "ERROR: Expression result relocatable, but not allowed!\n";
-            return Result::Error;
-        }
-        for (auto &token : expr)
+            for (auto &token : expr)
             if (token->type == Expression_Token::Symbol)
             {
                 auto &sym = static_cast<Symbol_Token&>(*token);
                 if (!insert_reloc(sym.name, R_VN_16, 0, false))
                 {
-                    cerr << "ERROR: Failed to insert reloc for: \"" << sym.name << "\"!\n";
+                    cerr << "ERROR: Failed to insert reloc for: '" << sym.name << "'!\n";
                     return Result::Error;
                 }
             }
-        value = result.first;
+            value = result.value;
+        }
+        else return Result::Reloc;
     }
     else
     {
-        cerr << "ERROR: Invalid class index: " << result.second << "!\n";
+        cerr << "ERROR: Invalid class index: " << result.clidx << "!\n";
         return Result::Error;
     }
     return Result::Success;
 }
 
-bool Assembler::get_symtab_entry(const string &str, Symtab_Entry &entry)
+bool Assembler::get_symtab_entry(const string &str, Symtab_Entry &entry, bool silent)
 {
     if (symtab_map.count(str) == 0)
     {
-        cerr << "ERROR: Undefined reference to: \"" << str << "\"!\n";
+        if (!silent)
+            cerr << "ERROR: Undefined reference to: '" << str << "'!\n";
         return false;
     }
     entry = symtab_map.at(str);
     return true;
+}
+
+string Assembler::get_section_name(unsigned shndx)
+{
+    if (shndx == SHN_UNDEF)
+        return "UND";
+    else if (shndx == SHN_ABS)
+        return "ABS";
+    else
+        return shstrtab_vect[shndx];
 }
 
 int Assembler::get_operand_code_size(const string &str, uint8_t expected_size)
@@ -902,7 +1029,7 @@ bool Assembler::add_symbol(const string &symbol)
 {
     if (symtab_map.count(symbol) > 0)
     {
-        cerr << "ERROR: Symbol \"" << symbol << "\" already in use!\n";
+        cerr << "ERROR: Symbol '" << symbol << "' already in use!\n";
         return false;
     }
 
@@ -920,7 +1047,6 @@ bool Assembler::add_symbol(const string &symbol)
 
     Symtab_Entry entry(name, cur_sect.loc_cnt, ELF16_ST_INFO(STB_LOCAL, type), cur_sect.shdrtab_index);
     symtab_map.insert(symtab_pair_t(symbol, entry));
-    symtab_vect.push_back(entry.sym);
 
     return true;
 }
@@ -973,13 +1099,13 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
                 if (!get_symtab_entry(token1, entry)) return false;
                 if (entry.sym.st_shndx != SHN_ABS)
                 {
-                    cerr << "ERROR: Symbol: \"" << token1 << "\" is not an absolute symbol and cannot be used for byte-immediate addressing!\n";
+                    cerr << "ERROR: Symbol: '" << token1 << "' is not an absolute symbol and cannot be used for byte-immediate addressing!\n";
                     return false;
                 }
                 int16_t value = entry.sym.st_value;
                 push_byte(value & 0xff);
                 if (value >= -128 && value <= 127) return true;
-                cerr << "ERROR: Value of absolute symbol: \"" << token1 << "\" is greater than a byte value and cannot be used for byte-immediate addressing!\n";
+                cerr << "ERROR: Value of absolute symbol: '" << token1 << "' is greater than a byte value and cannot be used for byte-immediate addressing!\n";
                 return false;
             }
             else
@@ -987,7 +1113,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
                 Elf16_Half byte;
                 if (!parser->decode_byte(token1, byte))
                 {
-                    cerr << "ERROR: Failed to decode: \"" << token1 << "\" as a byte value!\n";
+                    cerr << "ERROR: Failed to decode: '" << token1 << "' as a byte value!\n";
                     return false;
                 }
                 push_byte(byte);
@@ -1017,7 +1143,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
                 Elf16_Word word;
                 if (!parser->decode_word(token1, word))
                 {
-                    cerr << "ERROR: Failed to decode: \"" << token1 << "\" as a word value!\n";
+                    cerr << "ERROR: Failed to decode: '" << token1 << "' as a word value!\n";
                     return false;
                 }
                 push_word(word);
@@ -1029,7 +1155,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             Elf16_Half opdesc;
             if (!parser->decode_register(token1, opdesc))
             {
-                cerr << "ERROR: Invalid register: \"" << token1 << "\"!\n";
+                cerr << "ERROR: Invalid register: '" << token1 << "'!\n";
                 return false;
             }
             opdesc |= Addressing_Mode::RegDir;
@@ -1042,7 +1168,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         Elf16_Half opdesc;
         if (!parser->decode_register(token1, opdesc))
         {
-            cerr << "ERROR: Invalid register: \"" << token1 << "\"!\n";
+            cerr << "ERROR: Invalid register: '" << token1 << "'!\n";
             return false;
         }
         opdesc |= Addressing_Mode::RegInd;
@@ -1054,7 +1180,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         Elf16_Half opdesc;
         if (!parser->decode_register(token1, opdesc))
         {
-            cerr << "ERROR: Invalid register: \"" << token1 << "\"!\n";
+            cerr << "ERROR: Invalid register: '" << token1 << "'!\n";
             return false;
         }
         Elf16_Half byteoff;
@@ -1081,7 +1207,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         }
         else
         {
-            cerr << "ERROR: Failed to decode: \"" << token2 << "\" as a byte or word value!\n";
+            cerr << "ERROR: Failed to decode: '" << token2 << "' as a byte or word value!\n";
             return false;
         }
         return true;
@@ -1091,7 +1217,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         Elf16_Half opdesc;
         if (!parser->decode_register(token1, opdesc))
         {
-            cerr << "ERROR: Invalid register: \"" << token1 << "\"!\n";
+            cerr << "ERROR: Invalid register: '" << token1 << "'!\n";
             return false;
         }
         opdesc |= Addressing_Mode::RegIndOff16;
@@ -1100,7 +1226,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         if (!get_symtab_entry(token2, entry)) return false;
         if (entry.sym.st_shndx != SHN_ABS)
         {
-            cerr << "ERROR: Relative symbol: \"" << token2 << "\" cannot be used as an offset for register indirect addressing!\n";
+            cerr << "ERROR: Relative symbol: '" << token2 << "' cannot be used as an offset for register indirect addressing!\n";
             return false;
         }
         push_byte(entry.sym.st_value & 0xff);
@@ -1120,14 +1246,14 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         Elf16_Word address;
         if (!parser->decode_word(token1, address))
         {
-            cerr << "ERROR: Invalid address: \"" << token1 << "\"!\n";
+            cerr << "ERROR: Invalid address: '" << token1 << "'!\n";
             return false;
         }
         push_byte(Addressing_Mode::Mem);
         push_word(address);
         return true;
     }
-    cerr << "ERROR: Invalid operand: \"" << str << "\"!\n";
+    cerr << "ERROR: Invalid operand: '" << str << "'!\n";
     return false;
 }
 
@@ -1135,13 +1261,26 @@ bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_A
 {
     Symtab_Entry entry;
     if (!get_symtab_entry(symbol, entry)) return false;
-    Elf16_Word value;
+    int value;
     if (entry.sym.st_shndx == SHN_ABS)
     {
         if (type == R_VN_16) value = entry.sym.st_value;
         else
         {
-            cerr << "ERROR: Symbol: \"" << symbol << "\" is an absolute symbol and cannot be used for memory addressing!\n";
+            cerr << "ERROR: Symbol: '" << symbol << "' is an absolute symbol and cannot be used for memory addressing!\n";
+            return false;
+        }
+    }
+    else if (entry.is_equ)
+    {   // .equ symbol but relocatable, the expression must be re-evaluated, now with allowed relocation
+        if (equ_reloc_map.count(symbol) == 0)
+        {   // should never happen
+            cerr << "ERROR: Assembler error: Relocatable .equ symbol '" << symbol << "' does not have a expression definition!\n";
+            return false;
+        }
+        if (process_expression(*(equ_reloc_map.at(symbol)), value, false, true) != Result::Success)
+        {
+            cerr << "ERROR: Failed to evaluate expression for .equ symbol '" << symbol << "'!\n";
             return false;
         }
     }

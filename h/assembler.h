@@ -11,7 +11,7 @@
 #include <map>
 
 enum class Pass { First, Second };
-enum class Result { Success, Error, End };
+enum class Result { Success, Error, End, Uneval, Reloc };
 
 class Addressing_Mode
 {
@@ -51,12 +51,15 @@ typedef struct Symtab_Entry
 
     Elf16_Addr index;
     Elf16_Sym sym;
+    bool is_equ;        // Specifies whether the symbol is defined by .equ directive
+                        // If this is true and the sym.st_shndx is SHN_UNDEF, the expression
+                        // must be evaluated on each use since the value is relocatable
 
     Symtab_Entry() {};
 
-    Symtab_Entry(Elf16_Word name, Elf16_Addr value, uint8_t info, Elf16_Section shndx)
+    Symtab_Entry(Elf16_Word name, Elf16_Addr value, uint8_t info, Elf16_Section shndx, bool is_equ = false)
+        : index(symtab_index++), is_equ(is_equ)
     {
-        index           = symtab_index++;
         sym.st_name     = name;     // String table index
         sym.st_value    = value;    // Symbol value = 1* label - current location counter, 2* constant - .equ value
         sym.st_size     = 0;        // Symbol size
@@ -76,8 +79,8 @@ typedef struct Shdrtab_Entry
     Shdrtab_Entry() {};
 
     Shdrtab_Entry(Elf16_Word type, Elf16_Word flags, Elf16_Word info = 0, Elf16_Word entsize = 0, Elf16_Word size = 0)
+        : index(shdrtab_index++)
     {
-        index               = shdrtab_index++;
         shdr.sh_name        = index;    // Section header string table index
         shdr.sh_type        = type;     // Section type
         shdr.sh_flags       = flags;    // Section flags
@@ -102,8 +105,9 @@ typedef struct Reltab_Entry
     }
 } Reltab_Entry;
 
-typedef std::pair<const std::string, Symtab_Entry>  symtab_pair_t;
-typedef std::pair<const std::string, Shdrtab_Entry> shdrtab_pair_t;
+typedef std::pair<const std::string, std::unique_ptr<Expression>>   expr_pair_t;
+typedef std::pair<const std::string, Symtab_Entry>                  symtab_pair_t;
+typedef std::pair<const std::string, Shdrtab_Entry>                 shdrtab_pair_t;
 
 class Assembler
 {
@@ -132,15 +136,19 @@ private:
     std::map<std::string, Shdrtab_Entry>                shdrtab_map;
     std::map<std::string, std::vector<Reltab_Entry>>    reltab_map;
     std::map<std::string, std::vector<Elf16_Half>>      section_map;
+    std::map<std::string, std::unique_ptr<Expression>>  equ_reloc_map;
+    std::map<std::string, std::unique_ptr<Expression>>  equ_uneval_map;
 
     std::vector<Line_Info>      file_vect;
     std::vector<std::string>    strtab_vect;
     std::vector<std::string>    shstrtab_vect;
-    std::vector<Elf16_Sym>      symtab_vect;
-    std::vector<Elf16_Shdr>     shdrtab_vect;
+    std::vector<Elf16_Sym*>     symtab_vect;
+    std::vector<Elf16_Shdr*>    shdrtab_vect;
 
     bool run_first_pass();
     bool run_second_pass();
+
+    bool evaluate_expressions();
 
     void print_line(Line_Info &info);
     void print_file(std::ostream &out);
@@ -151,9 +159,10 @@ private:
     Result process_line(Line_Info &info);
     Result process_directive(const Directive &dir);
     Result process_instruction(const Instruction &instr);
-    Result process_expression(const Expression &expr, int &value, bool allow_reloc = true);
+    Result process_expression(const Expression &expr, int &value, bool allow_undef, bool do_reloc);
 
-    bool get_symtab_entry(const std::string &str, Symtab_Entry &entry);
+    bool get_symtab_entry(const std::string &str, Symtab_Entry &entry, bool silent = false);
+    std::string get_section_name(unsigned shndx);
     int get_operand_code_size(const std::string &str, uint8_t operand_size);
 
     bool add_symbol(const std::string &symbol);

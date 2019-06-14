@@ -16,7 +16,7 @@
 
 main:
     push &hello_world
-    call writeln
+    call $writeln
     test r0, r1
     jne $end
     mov r0, 4
@@ -30,7 +30,7 @@ hello_world: .byte char_H, char_e, char_l, char_l, char_o, char_space, char_W, c
 .data
 
 n:
-.word 5, 6, 3 * -6, ARRAY_BEGIN + 3, n
+.word 5, offset + 7 * 2 - (6 ^ 3), 3 * -6, ARRAY_BEGIN + 3, n
 
 ARRAY_BEGIN:
 .skip 100, 0xff
