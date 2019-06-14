@@ -468,8 +468,8 @@ void Assembler::write_output()
         output.close();
     if (binary)
     {
-        output.open(output_file, ios::out | ios::binary);
-        // not implemented yet
+        // Not implemented yet
+        // output.open(output_file, ios::out | ios::binary);
     }
     else
     {

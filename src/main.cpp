@@ -12,9 +12,10 @@ using std::string;
 
 void show_usage(const string &program_name)
 {
-    cout << "Usage: " << program_name << " [options] file...\n"; // [-e] [-o <output_file>] <input_file>\n";
+    cout << "Usage: " << program_name << " [options] file...\n";
     cout << "Options:\n";
-    cout << "  -e\t\tOutput in binary format for use in the provided emulator.\n";
+    // Not implemented yet
+    // cout << "  -e\t\tOutput in binary format for use in the provided emulator.\n";
     cout << "  -o <file>\tPlace the output into <file>.\n";
 }
 
@@ -57,9 +58,11 @@ int main(int argc, char *argv[])
 
     for (int i = 1; i < argc; ++i)
     {
-        if (string(argv[i]) == "-e")
-            eflag = true; // set -e flag
-        else if (string(argv[i]) == "-o")
+        // Not implemented yet
+        // if (string(argv[i]) == "-e")
+        //     eflag = true; // set -e flag
+        // else if (string(argv[i]) == "-o")
+        if (string(argv[i]) == "-o")
         {
             if (i == argc - 1) // -o flag is the last argument
             {
