@@ -1,5 +1,5 @@
 .global main
-.extern a, b
+.extern a, b, c
 
 .equ c, a
 .equ d, b + 2

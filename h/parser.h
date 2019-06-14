@@ -1,7 +1,6 @@
 #ifndef _PARSER_H
 #define _PARSER_H
 
-#include "elf.h"
 #include "lexer.h"
 
 #include <map>
@@ -36,8 +35,8 @@ class Expression_Token
 public:
     enum Token_Type { Operator, Number, Symbol };
     const Token_Type type;
-    Expression_Token(const Expression_Token &t) : type(t.type) {}
-    Expression_Token(Token_Type type) : type(type) {}
+    Expression_Token(const Expression_Token &t);
+    Expression_Token(Token_Type type);
     virtual ~Expression_Token() {}
 };
 
@@ -47,89 +46,30 @@ public:
     enum Operator_Type { Open, Close, Add, Sub, Mul, Div, Mod, And, Or, Xor };
     const Operator_Type op_type;
 
-    Operator_Token(const Operator_Token &t) : Expression_Token(Operator), op_type(t.op_type) {}
-    Operator_Token(Operator_Type op_type) : Expression_Token(Operator), op_type(op_type) {}
+    Operator_Token(const Operator_Token &t);
+    Operator_Token(Operator_Type op_type);
 
-    char get_symbol()
-    {
-        if (op_type == Open) return '(';
-        if (op_type == Close) return ')';
-        if (op_type == Add) return '+';
-        if (op_type == Sub) return '-';
-        if (op_type == Mul) return '*';
-        if (op_type == Div) return '/';
-        if (op_type == Mod) return '%';
-        if (op_type == And) return '&';
-        if (op_type == Or) return '|';
-        return '^';
-    }
-
-    int priority()
-    {
-        if (op_type == Open) return 1;
-        if (op_type == Or) return 2;
-        if (op_type == Xor) return 3;
-        if (op_type == And) return 4;
-        if (op_type == Add || op_type == Sub) return 5;
-        if (op_type == Mul || op_type == Div || op_type == Mod) return 6;
-        return 0;
-    }
-
-    int calculate(unsigned a, unsigned b)
-    {
-        if (op_type == Or) return a | b;
-        if (op_type == Xor) return a ^ b;
-        if (op_type == And) return a & b;
-        if (op_type == Add) return a + b;
-        if (op_type == Sub) return a - b;
-        if (op_type == Mul) return a * b;
-        if (op_type == Div) return (b == 0 ? -1 : a / b);
-        if (op_type == Mod) return a % b;
-        return -1;
-    }
-
-    int get_st_shndx(int shndx_a, int shndx_b)
-    {
-        if (shndx_a == SHN_ABS && shndx_b == SHN_ABS) return SHN_ABS;
-        if (op_type == Add || op_type == Sub)
-        {
-            if (shndx_a != SHN_ABS)
-            {
-                if (shndx_b == SHN_ABS) return shndx_a; // REL [+-] ABS -> REL
-                if (op_type == Add) return -1; // REL + REL -> ERROR
-                if (shndx_a == shndx_b && shndx_a != SHN_UNDEF) return SHN_ABS;
-                return -1; // REL - REL & (A != B || A == B == UNDEF) -> ERROR
-            }
-            else
-            {
-                if (op_type == Add) return shndx_b; // ABS + REL -> REL
-                return -1; // ABS - REL -> ERROR
-            }
-        }
-        return -1; // Invalid operation for relative value (symbol)
-    }
-
-    int get_clidx(int clidx_a, int clidx_b)
-    {
-        if (op_type == Sub) return clidx_a - clidx_b;
-        return clidx_a + clidx_b;
-    }
+    char get_symbol();
+    int priority();
+    int calculate(unsigned a, unsigned b);
+    int get_st_shndx(int shndx_a, int shndx_b);
+    int get_clidx(int clidx_a, int clidx_b);
 };
 
 class Number_Token : public Expression_Token
 {
 public:
     const int value;
-    Number_Token(const Number_Token &t) : Expression_Token(Number), value(t.value) {}
-    Number_Token(int value) : Expression_Token(Number), value(value) {}
+    Number_Token(const Number_Token &t);
+    Number_Token(int value);
 };
 
 class Symbol_Token : public Expression_Token
 {
 public:
     std::string name;
-    Symbol_Token(const Symbol_Token &t) : Expression_Token(Symbol), name(t.name) {}
-    Symbol_Token(const std::string &name) : Expression_Token(Symbol), name(name) {}
+    Symbol_Token(const Symbol_Token &t);
+    Symbol_Token(const std::string &name);
 };
 
 typedef std::vector<std::unique_ptr<Expression_Token>> Expression;

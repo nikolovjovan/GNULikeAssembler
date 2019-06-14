@@ -21,8 +21,48 @@ using std::string;
 using std::unique_ptr;
 using std::vector;
 
+Line_Info::Line_Info() {}
+Line_Info::Line_Info(unsigned line_num, Elf16_Addr loc_cnt, Line line) : line_num(line_num), loc_cnt(loc_cnt), line(line) {}
+
+Symtab_Entry::Symtab_Entry() {};
+
+Symtab_Entry::Symtab_Entry(Elf16_Word name, Elf16_Addr value, uint8_t info, Elf16_Section shndx, bool is_equ)
+    : index(symtab_index++), is_equ(is_equ)
+{
+    sym.st_name     = name;     // String table index
+    sym.st_value    = value;    // Symbol value = 1* label - current location counter, 2* constant - .equ value
+    sym.st_size     = 0;        // Symbol size
+    sym.st_info     = info;     // Symbol type and binding
+    sym.st_other    = 0;        // No defined meaning, 0
+    sym.st_shndx    = shndx;    // Section header table index
+}
+
 Elf16_Addr Symtab_Entry::symtab_index   = 0;
+
+Shdrtab_Entry::Shdrtab_Entry() {};
+
+Shdrtab_Entry::Shdrtab_Entry(Elf16_Word type, Elf16_Word flags, Elf16_Word info, Elf16_Word entsize, Elf16_Word size)
+    : index(shdrtab_index++)
+{
+    shdr.sh_name        = index;    // Section header string table index
+    shdr.sh_type        = type;     // Section type
+    shdr.sh_flags       = flags;    // Section flags
+    shdr.sh_addr        = 0;        // Section virtual address
+    shdr.sh_offset      = 0;        // Section file offset
+    shdr.sh_size        = size;     // Section size in bytes
+    shdr.sh_link        = 0;        // Link to another section
+    shdr.sh_info        = info;     // Additional section information
+    shdr.sh_addralign   = 0;        // Section alignment (0 | 1 = no alignment, 2^n = alignment)
+    shdr.sh_entsize     = entsize;  // Entry size if section holds table
+}
+
 Elf16_Addr Shdrtab_Entry::shdrtab_index = 0;
+
+Reltab_Entry::Reltab_Entry(Elf16_Word info, Elf16_Addr offset)
+{
+    rel.r_offset = offset;
+    rel.r_info = info;
+}
 
 Assembler::Assembler(const string &input_file, const string &output_file, bool binary)
 {
@@ -163,30 +203,36 @@ bool Assembler::evaluate_expressions()
 {
     Result res;
     int value;
-    for (auto it = equ_uneval_map.begin(); it != equ_uneval_map.end(); ++it)
+    bool changes = true;
+    while (changes)
     {
-        res = process_expression(*(it->second), value, false, false);
-        if (res == Result::Error || res == Result::Uneval)
+        changes = false;
+        for (auto it = equ_uneval_map.begin(); it != equ_uneval_map.end(); ++it)
         {
-            cerr << "ERROR: Failed to evaluate expression for .equ symbol '" << it->first << "'!\n";
-            return false;
-        }
-        else if (res == Result::Reloc)
-            equ_reloc_map.emplace(expr_pair_t(it->first, std::move(it->second)));
-        else
-        {
-            if (symtab_map.count(it->first) == 0)
-            {   // should never happen
-                cerr << "ERROR: Assembler error: Unevaluated .equ symbol '" << it->first << "' is undefined!\n";
+            res = process_expression(*(it->second), value, true, it->first);
+            if (res == Result::Error)
+            {
+                cerr << "ERROR: Failed to evaluate expression for .equ symbol '" << it->first << "'!\n";
                 return false;
             }
-            Symtab_Entry &entry = symtab_map.at(it->first);
-            entry.sym.st_shndx = SHN_ABS;
-            entry.sym.st_value = value;
+            if (res == Result::Success)
+            {
+                if (symtab_map.count(it->first) == 0)
+                {   // should never happen
+                    cerr << "ERROR: Assembler error: Unevaluated .equ symbol '" << it->first << "' is undefined!\n";
+                    return false;
+                }
+                Symtab_Entry &entry = symtab_map.at(it->first);
+                entry.sym.st_shndx = SHN_ABS;
+                entry.sym.st_value = value;
+            }
+            changes = true;
+            equ_uneval_map.erase(it->first);
+            break;
         }
     }
-    equ_uneval_map.clear();
-    return true;
+    if (equ_uneval_map.empty()) return true;
+    return false;
 }
 
 void Assembler::print_line(Line_Info &info)
@@ -517,8 +563,14 @@ Result Assembler::process_directive(const Directive &dir)
             {
                 if (symtab_map.count(symbol) > 0)
                 {
-                    int type = ELF16_ST_TYPE(symtab_map.at(symbol).sym.st_info);
-                    symtab_map.at(symbol).sym.st_info = ELF16_ST_INFO(STB_GLOBAL, type);
+                    Symtab_Entry &entry = symtab_map.at(symbol);
+                    if (entry.is_equ && entry.sym.st_shndx != SHN_ABS)
+                    {
+                        cerr << "ERROR: Relative .equ symbol '" << symbol << "' cannot be global!\n";
+                        return Result::Error;
+                    }
+                    int type = ELF16_ST_TYPE(entry.sym.st_info);
+                    entry.sym.st_info = ELF16_ST_INFO(STB_GLOBAL, type);
                 }
                 else
                 {
@@ -566,32 +618,32 @@ Result Assembler::process_directive(const Directive &dir)
         }
         int value;
         Result res;
-        if ((res = process_expression(*expr, value, true, false)) == Result::Error)
+        if ((res = process_expression(*expr, value, true, symbol)) == Result::Error)
         {
             cerr << "ERROR: Invalid expression: '" << dir.p2 <<"'!\n";
             return Result::Error;
         }
         if (symtab_map.count(symbol) > 0)
         {
-            if (dir.code == Directive::Set)
+            Symtab_Entry &entry = symtab_map.at(symbol);
+            if (dir.code == Directive::Set || entry.sym.st_value == 0
+                && entry.sym.st_shndx == SHN_UNDEF
+                && entry.sym.st_info == ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE))
             {
                 Symtab_Entry &entry = symtab_map.at(symbol);
-                if (res == Result::Uneval)
-                {
-                    entry.sym.st_shndx = SHN_UNDEF;
-                    equ_uneval_map.emplace(expr_pair_t(symbol, std::move(expr)));
-                }
-                else if (res == Result::Reloc)
-                {
-                    entry.sym.st_shndx = SHN_UNDEF;
-                    equ_reloc_map.emplace(expr_pair_t(symbol, std::move(expr)));
-                }
-                else if (entry.sym.st_shndx == SHN_UNDEF)
+                if (res == Result::Success && entry.sym.st_shndx == SHN_UNDEF)
                 {
                     entry.sym.st_shndx = SHN_ABS;
                     if (equ_uneval_map.count(symbol) > 0) equ_uneval_map.erase(symbol);
                     if (equ_reloc_map.count(symbol) > 0) equ_reloc_map.erase(symbol);
                 }
+                else if (res == Result::Uneval)
+                {
+                    entry.sym.st_shndx = SHN_UNDEF;
+                    equ_uneval_map.emplace(equ_uneval_pair_t(symbol, std::move(expr)));
+                }
+                else if (res == Result::Reloc) entry.sym.st_shndx = SHN_UNDEF;
+                entry.sym.st_info = ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE);
                 entry.sym.st_value = value;
             }
             else
@@ -605,8 +657,7 @@ Result Assembler::process_directive(const Directive &dir)
             strtab_vect.push_back(symbol);
             Symtab_Entry entry(strtab_vect.size() - 1, value, ELF16_ST_INFO(STB_LOCAL, STT_NOTYPE), res != Result::Success ? SHN_UNDEF : SHN_ABS, true);
             symtab_map.insert(symtab_pair_t(symbol, entry));
-            if (res == Result::Uneval) equ_uneval_map.emplace(expr_pair_t(symbol, std::move(expr)));
-            else if (res == Result::Reloc) equ_reloc_map.emplace(expr_pair_t(symbol, std::move(expr)));
+            if (res == Result::Uneval) equ_uneval_map.emplace(equ_uneval_pair_t(symbol, std::move(expr)));
         }
         return Result::Success;
     }
@@ -687,7 +738,7 @@ Result Assembler::process_directive(const Directive &dir)
                     return Result::Error;
                 }
                 int value;
-                if (process_expression(expr, value, false, true) != Result::Success)
+                if (process_expression(expr, value, false) != Result::Success)
                 {
                     cerr << "ERROR: Invalid expression: '" << token <<"'!\n";
                     return Result::Error;
@@ -715,7 +766,7 @@ Result Assembler::process_directive(const Directive &dir)
                     return Result::Error;
                 }
                 int value;
-                if (process_expression(expr, value, false, true) != Result::Success)
+                if (process_expression(expr, value, false) != Result::Success)
                 {
                     cerr << "ERROR: Invalid expression: '" << token <<"'!\n";
                     return Result::Error;
@@ -853,7 +904,7 @@ Result Assembler::process_instruction(const Instruction &instr)
     return Result::Error;
 }
 
-Result Assembler::process_expression(const Expression &expr, int &value, bool allow_undef, bool do_reloc)
+Result Assembler::process_expression(const Expression &expr, int &value, bool allow_undef, const string &equ_name)
 {
     typedef struct { int value, clidx, shndx; } operand_t; // clidx: 0 = ABS, 1 = REL, other = INVALID
     typedef Operator_Token operator_t;
@@ -952,31 +1003,42 @@ Result Assembler::process_expression(const Expression &expr, int &value, bool al
         values.push(result);
         rank--;
     }
-    if (rank != 1)
-    {
-        cerr << "ERROR: Invalid expression!\n";
-        return Result::Error;
-    }
+    if (rank != 1) return Result::Error;
     operand_t result = values.top();
     values.pop();
     if (result.clidx == 0) value = result.value;
     else if (result.clidx == 1)
     {
-        if (do_reloc)
+        if (!equ_name.empty())
+        {
+            vector<Reltab_Entry> reloc_vect;
+            for (auto &token : expr)
+                if (token->type == Expression_Token::Symbol)
+                {
+                    auto &sym = static_cast<Symbol_Token&>(*token);
+                    if (!insert_reloc(sym.name, R_VN_16, 0, false, &reloc_vect))
+                    {
+                        cerr << "ERROR: Failed to insert .equ reloc for: '" << sym.name << "'!\n";
+                        return Result::Error;
+                    }
+                }
+            equ_reloc_map.insert(equ_relocs_pair_t(equ_name, reloc_pair_t(result.value, reloc_vect)));
+            return Result::Reloc;
+        }
+        else
         {
             for (auto &token : expr)
-            if (token->type == Expression_Token::Symbol)
-            {
-                auto &sym = static_cast<Symbol_Token&>(*token);
-                if (!insert_reloc(sym.name, R_VN_16, 0, false))
+                if (token->type == Expression_Token::Symbol)
                 {
-                    cerr << "ERROR: Failed to insert reloc for: '" << sym.name << "'!\n";
-                    return Result::Error;
+                    auto &sym = static_cast<Symbol_Token&>(*token);
+                    if (!insert_reloc(sym.name, R_VN_16, 0, false))
+                    {
+                        cerr << "ERROR: Failed to insert reloc for: '" << sym.name << "'!\n";
+                        return Result::Error;
+                    }
                 }
-            }
             value = result.value;
         }
-        else return Result::Reloc;
     }
     else
     {
@@ -1027,23 +1089,41 @@ int Assembler::get_operand_code_size(const string &str, uint8_t expected_size)
 
 bool Assembler::add_symbol(const string &symbol)
 {
-    if (symtab_map.count(symbol) > 0)
-    {
-        cerr << "ERROR: Symbol '" << symbol << "' already in use!\n";
-        return false;
-    }
+    bool exists = symtab_map.count(symbol) > 0;
 
     Elf16_Word name = 0;
     Elf16_Half type = STT_NOTYPE;
 
-    if (symbol != cur_sect.name)
+    if (symbol == cur_sect.name) type = STT_SECTION;
+    else
     {
-        strtab_vect.push_back(symbol);
-        name = strtab_vect.size() - 1;
+        if (exists) name = symtab_map.at(symbol).sym.st_name;
+        else
+        {
+            strtab_vect.push_back(symbol);
+            name = strtab_vect.size() - 1;
+        }
         if (cur_sect.flags & SHF_EXECINSTR) type = STT_FUNC;
         else if (cur_sect.flags & SHF_ALLOC) type = STT_OBJECT;
     }
-    else type = STT_SECTION;
+
+    if (exists)
+    {
+        Symtab_Entry &entry = symtab_map.at(symbol);
+        if (entry.sym.st_value == 0 && entry.sym.st_shndx == SHN_UNDEF
+            && entry.sym.st_info == ELF16_ST_INFO(STB_GLOBAL, STT_NOTYPE))
+        {   // extern global symbol
+            entry.sym.st_value = cur_sect.loc_cnt;
+            entry.sym.st_shndx = cur_sect.shdrtab_index;
+            entry.sym.st_info = ELF16_ST_INFO(STB_LOCAL, type);
+            return true;
+        }
+        else
+        {
+            cerr << "ERROR: Symbol '" << symbol << "' already in use!\n";
+            return false;
+        }
+    }
 
     Symtab_Entry entry(name, cur_sect.loc_cnt, ELF16_ST_INFO(STB_LOCAL, type), cur_sect.shdrtab_index);
     symtab_map.insert(symtab_pair_t(symbol, entry));
@@ -1257,7 +1337,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
     return false;
 }
 
-bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_Addr next_instr, bool place)
+bool Assembler::insert_reloc(const string &symbol, Elf16_Half type, Elf16_Addr next_instr, bool place, std::vector<Reltab_Entry> *relocs_vect)
 {
     Symtab_Entry entry;
     if (!get_symtab_entry(symbol, entry)) return false;
@@ -1267,20 +1347,7 @@ bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_A
         if (type == R_VN_16) value = entry.sym.st_value;
         else
         {
-            cerr << "ERROR: Symbol: '" << symbol << "' is an absolute symbol and cannot be used for memory addressing!\n";
-            return false;
-        }
-    }
-    else if (entry.is_equ)
-    {   // .equ symbol but relocatable, the expression must be re-evaluated, now with allowed relocation
-        if (equ_reloc_map.count(symbol) == 0)
-        {   // should never happen
-            cerr << "ERROR: Assembler error: Relocatable .equ symbol '" << symbol << "' does not have a expression definition!\n";
-            return false;
-        }
-        if (process_expression(*(equ_reloc_map.at(symbol)), value, false, true) != Result::Success)
-        {
-            cerr << "ERROR: Failed to evaluate expression for .equ symbol '" << symbol << "'!\n";
+            cerr << "ERROR: Absolute symbol: '" << symbol << "' cannot be used for memory addressing!\n";
             return false;
         }
     }
@@ -1291,15 +1358,34 @@ bool Assembler::insert_reloc(const std::string &symbol, Elf16_Half type, Elf16_A
             value = entry.sym.st_value - next_instr;
         else
         {
-            string relshdr = ".rel" + cur_sect.name;
-            add_shdr(relshdr, SHT_REL, SHF_INFO_LINK, true, shdrtab_map.at(cur_sect.name).index, sizeof(Elf16_Rel));
-            reltab_map[cur_sect.name].push_back(Reltab_Entry(ELF16_R_INFO(global ? entry.index : symtab_map.at(shstrtab_vect[entry.sym.st_shndx]).index, type), cur_sect.loc_cnt));
-            shdrtab_map.at(relshdr).shdr.sh_size += sizeof(Elf16_Rel);
-            value = global ? 0 : entry.sym.st_value;
-            if (type == R_VN_PC16) value += cur_sect.loc_cnt - next_instr;
+            if (entry.is_equ && equ_reloc_map.count(symbol) == 0)
+                return false; // relocs map vector not yet defined, wait for next try
+            if (relocs_vect == nullptr)
+            {
+                string relshdr = ".rel" + cur_sect.name;
+                add_shdr(relshdr, SHT_REL, SHF_INFO_LINK, true, shdrtab_map.at(cur_sect.name).index, sizeof(Elf16_Rel));
+                if (entry.is_equ)
+                {
+                    value = equ_reloc_map.at(symbol).first;
+                    for (auto reloc : equ_reloc_map.at(symbol).second)
+                        reltab_map[cur_sect.name].push_back(Reltab_Entry(reloc.rel.r_info, cur_sect.loc_cnt));
+                    shdrtab_map.at(relshdr).shdr.sh_size += equ_reloc_map.at(symbol).second.size() * sizeof(Elf16_Rel);
+                }
+                else
+                {
+                    value = global ? 0 : entry.sym.st_value;
+                    reltab_map[cur_sect.name].push_back(Reltab_Entry(ELF16_R_INFO(global ? entry.index : symtab_map.at(shstrtab_vect[entry.sym.st_shndx]).index, type), cur_sect.loc_cnt));
+                    shdrtab_map.at(relshdr).shdr.sh_size += sizeof(Elf16_Rel);
+                }
+                if (type == R_VN_PC16) value += cur_sect.loc_cnt - next_instr;
+            }
+            else if (entry.is_equ)
+                for (auto reloc : equ_reloc_map.at(symbol).second)
+                    relocs_vect->push_back(Reltab_Entry(reloc.rel.r_info, cur_sect.loc_cnt));
+            else
+                relocs_vect->push_back(Reltab_Entry(ELF16_R_INFO(global ? entry.index : symtab_map.at(shstrtab_vect[entry.sym.st_shndx]).index, type), cur_sect.loc_cnt));
         }
     }
-    if (!place) return true;
-    push_word(value);
+    if (place) push_word(value);
     return true;
 }
