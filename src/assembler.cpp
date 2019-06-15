@@ -144,14 +144,14 @@ bool Assembler::run_first_pass()
         input.close();
     input.open(input_file, ifstream::in);
 
-    for (info.line_num = 1; !input.eof(); ++info.line_num)
+    for (file_idx = 0, info.line_num = 1; !input.eof(); ++info.line_num)
     {
         getline(input, line_str);
         cout << info.line_num << ":\t" << line_str << '\n';
         if (parser->parse_line(line_str, info.line))
         {
             Result tmp = process_line(info);
-            if (tmp == Result::Success) continue;
+            if (tmp == Result::Success && !input.eof()) continue;
             if (tmp == Result::Error)
             {
                 cerr << "ERROR: Failed to process line: " << info.line_num << "!\n";
@@ -168,6 +168,8 @@ bool Assembler::run_first_pass()
             break;
         }
     }
+    // Adding an empty line for storing next_instr lc for the last instruction (line)
+    file_vect.push_back(Line_Info(0, cur_sect.loc_cnt, Line()));
 
     input.close();
     return res;
@@ -180,19 +182,18 @@ bool Assembler::run_second_pass()
 
     cout << "\n>>> SECOND PASS <<<\n\n";
 
-    for (unsigned i = 0; i < file_vect.size(); ++i)
+    for (file_idx = 0; file_idx < file_vect.size() - 1; ++file_idx)
     {
-        print_line(file_vect[i]); // temporary
-        cout << '\n';
-        Result tmp = process_line(file_vect[i]);
-        if (tmp == Result::Success) continue;
+        print_line(file_vect[file_idx]);
+        Result tmp = process_line(file_vect[file_idx]);
+        if (tmp == Result::Success && file_idx + 1 < file_vect.size() - 1) continue;
         if (tmp == Result::Error)
         {
-            cerr << "ERROR: Failed to process line: " << file_vect[i].line_num << "!\n";
+            cerr << "ERROR: Failed to process line: " << file_vect[file_idx].line_num << "!\n";
             res = false;
             break;
         }
-        cout << "End of file reached at line: " << file_vect[i].line_num << "!\n";
+        cout << "End of file reached at line: " << file_vect[file_idx].line_num << "!\n";
         break;
     }
 
@@ -238,12 +239,10 @@ bool Assembler::evaluate_expressions()
 void Assembler::print_line(Line_Info &info)
 {
     cout << info.line_num << ":\t";
-    cout << "LC = " << info.loc_cnt << "\t";
+    cout << "LC = " << setw(4) << setfill('0') << right << hex << info.loc_cnt << setw(1) << setfill(' ') << dec << "\t";
 
     if (!info.line.label.empty())
         cout << info.line.label << ": ";
-
-    if (info.line.content_type == Content_Type::None) return;
 
     if (info.line.content_type == Content_Type::Directive)
     {
@@ -255,7 +254,7 @@ void Assembler::print_line(Line_Info &info)
         if (!info.line.getDir().p3.empty())
             cout << ", " << info.line.getDir().p3;
     }
-    else
+    else if (info.line.content_type == Content_Type::Instruction)
     {
         cout << parser->get_instruction(info.line.getInstr().code);
         if (info.line.getInstr().op_cnt > 0)
@@ -266,6 +265,8 @@ void Assembler::print_line(Line_Info &info)
                 cout << ", " << info.line.getInstr().op2;
         }
     }
+
+    cout << '\n';
 }
 
 void Assembler::print_file(ostream &out)
@@ -309,7 +310,7 @@ void Assembler::print_file(ostream &out)
     for (unsigned i = 0; i < shdrtab_vect.size(); ++i)
     {
         out << "  [" << dec << setw(2) << setfill(' ') << right << i << "] ";
-        out << setw(20) << setfill(' ') << left << get_section_name(shdrtab_vect[i]->sh_name) << ' ';
+        out << setw(20) << setfill(' ') << left << (shdrtab_vect[i]->sh_name < shstrtab_vect.size() ? shstrtab_vect[shdrtab_vect[i]->sh_name] : " ") << ' ';
         out << setw(20) << setfill(' ') << left;
         switch (shdrtab_vect[i]->sh_type)
         {
@@ -527,27 +528,25 @@ void Assembler::write_output()
 
 Result Assembler::process_line(Line_Info &info)
 {
-    Result res = Result::Success;
-    if (!info.line.label.empty() || info.line.content_type != Content_Type::None)
+    if (info.line.label.empty() && info.line.content_type == Content_Type::None)
+        return Result::Success; // Skip empty line
+    if (pass == Pass::First)
     {
-        if (!info.line.label.empty() && pass == Pass::First)
-            if (!add_symbol(info.line.label))
-                return Result::Error;
-        if (info.line.content_type == Content_Type::Directive)
-        {
-            if ((res = process_directive(info.line.getDir())) == Result::Error)
-                return Result::Error;
-        }
-        else if (info.line.content_type == Content_Type::Instruction)
-        {
-            if ((res = process_instruction(info.line.getInstr())) == Result::Error)
-                return Result::Error;
-        }
         info.loc_cnt = cur_sect.loc_cnt;
-        if (pass == Pass::First)
-            file_vect.push_back(info);
+        file_vect.push_back(info);
+        file_idx++;
     }
-    return res;
+    if (!info.line.label.empty())
+    {
+        if (pass == Pass::First && !add_symbol(info.line.label))
+            return Result::Error;   // Failed to add label symbol
+        if (info.line.content_type == Content_Type::None)
+            return Result::Success; // No content, processing done
+    }
+    if (info.line.content_type == Content_Type::Directive)
+        return process_directive(info.line.getDir());
+    else
+        return process_instruction(info.line.getInstr());
 }
 
 Result Assembler::process_directive(const Directive &dir)
@@ -676,6 +675,9 @@ Result Assembler::process_directive(const Directive &dir)
 
         cur_sect.name       = name;
         cur_sect.loc_cnt    = lc_map[name];
+
+        if (pass == Pass::First)
+            file_vect[file_idx].loc_cnt = cur_sect.loc_cnt; // Update location counter
 
         if (cur_sect.loc_cnt == 0 && pass == Pass::First)
         {
@@ -819,7 +821,7 @@ Result Assembler::process_directive(const Directive &dir)
                 cerr << "ERROR: Required fill: " << size << " is larger than max allowed: " << (unsigned) max << "! Cannot apply alignment!\n";
                 return Result::Error;
             }
-            if (pass == Pass::First) cur_sect.loc_cnt += size;
+            if (pass == Pass::First) cur_sect.loc_cnt += size * sizeof(Elf16_Half);
             else for (unsigned i = 0; i < size; ++i) push_byte(fill);
         }
         return Result::Success;
@@ -844,7 +846,7 @@ Result Assembler::process_directive(const Directive &dir)
             cerr << "ERROR: Failed to decode: '" << dir.p2 << "' as a byte value!\n";
             return Result::Error;
         }
-        if (pass == Pass::First) cur_sect.loc_cnt += size;
+        if (pass == Pass::First) cur_sect.loc_cnt += size * sizeof(Elf16_Half);
         else for (unsigned i = 0; i < size; ++i) push_byte(fill);
         return Result::Success;
     }
@@ -867,34 +869,38 @@ Result Assembler::process_instruction(const Instruction &instr)
     }
     else if (instr.op_cnt == 1)
     {   // one-address instructions
-        int op_size = get_operand_code_size(instr.op1, instr.op_size);
-        if (op_size < 1) return Result::Error;
-        Elf16_Addr next_instr = cur_sect.loc_cnt + sizeof(Elf16_Half) + op_size;
-        if (pass == Pass::First) cur_sect.loc_cnt = next_instr;
+        if (pass == Pass::First)
+        {
+            int op_size = get_operand_code_size(instr.op1, instr.op_size);
+            if (op_size < 1) return Result::Error;
+            cur_sect.loc_cnt += sizeof(Elf16_Half) + op_size;
+        }
         else
         {
             Elf16_Half opcode = instr.code << 3;
             if (instr.op_size == Operand_Size::Word) opcode |= 0x4; // S bit = 0 for byte sized operands, = 1 for word sized operands
             push_byte(opcode);
-            if (!insert_operand(instr.op1, instr.op_size, next_instr)) return Result::Error;
+            if (!insert_operand(instr.op1, instr.op_size, file_vect[file_idx + 1].loc_cnt)) return Result::Error;
         }
         return Result::Success;
     }
     else if (instr.op_cnt == 2)
     {   // two-address instructions
-        int op1_size = get_operand_code_size(instr.op1, instr.op_size);
-        if (op1_size < 1) return Result::Error;
-        int op2_size = get_operand_code_size(instr.op2, instr.op_size);
-        if (op2_size < 1) return Result::Error;
-        Elf16_Addr next_instr = cur_sect.loc_cnt + sizeof(Elf16_Half) + op1_size + op2_size;
-        if (pass == Pass::First) cur_sect.loc_cnt = next_instr;
+        if (pass == Pass::First)
+        {
+            int op1_size = get_operand_code_size(instr.op1, instr.op_size);
+            if (op1_size < 1) return Result::Error;
+            int op2_size = get_operand_code_size(instr.op2, instr.op_size);
+            if (op2_size < 1) return Result::Error;
+            cur_sect.loc_cnt += sizeof(Elf16_Half) + op1_size + op2_size;
+        }
         else
         {
             Elf16_Half opcode = instr.code << 3;
             if (instr.op_size == Operand_Size::Word) opcode |= 0x4; // S bit = 0 for byte sized operands, = 1 for word sized operands
             push_byte(opcode);
-            if (!insert_operand(instr.op1, instr.op_size, next_instr)) return Result::Error;
-            if (!insert_operand(instr.op2, instr.op_size, next_instr)) return Result::Error;
+            if (!insert_operand(instr.op1, instr.op_size, file_vect[file_idx + 1].loc_cnt)) return Result::Error;
+            if (!insert_operand(instr.op2, instr.op_size, file_vect[file_idx + 1].loc_cnt)) return Result::Error;
         }
         return Result::Success;
     }
@@ -1069,19 +1075,65 @@ string Assembler::get_section_name(unsigned shndx)
 
 int Assembler::get_operand_code_size(const string &str, uint8_t expected_size)
 {
-    if (lexer->match_operand_1b(str)) return 1;
-    string offset_str;
-    if (!lexer->match_operand_2b(str, offset_str)) return 3;
-    string symbol_str;
-    uint8_t offset;
-    if (lexer->match_symbol(offset_str.substr(offset_str[0] == '&'), symbol_str))
-        return 1 + expected_size; // cannot verify symbol now, just use expected size
-    else if (parser->decode_byte(offset_str, offset))
+    if (expected_size == Operand_Size::None) return 0;  // Invalid parameter
+    string token1, token2;
+    if (lexer->match_imm_w(str, token1))
     {
-        if (offset == 0) return 1; // if offset is zero assume regind without offset
-        return 2;
+        if (token1[0] != '&')
+        {   // token1 is a number, not a symbol
+            if (expected_size == Operand_Size::Byte)
+            {
+                Elf16_Half byte;
+                if (!parser->decode_byte(token1, byte))
+                {
+                    cerr << "ERROR: Invalid byte operand: '" << token1 << "'!\n";
+                    return 0;
+                }
+            }
+            else
+            {
+                Elf16_Word word;
+                if (!parser->decode_word(token1, word))
+                {
+                    cerr << "ERROR: Invalid word operand: '" << token1 << "'!\n";
+                    return 0;
+                }
+            }
+        }
+        // If token1 is a symbol, we cannot verify it now, just return expected size
+        return sizeof(Elf16_Half) + expected_size;
     }
-    return 3;
+    else if (expected_size == Operand_Size::Byte && lexer->match_regdir_b(str, token1)
+          || expected_size == Operand_Size::Word && lexer->match_regdir_w(str, token1)
+          || lexer->match_regind(str, token1))
+        return sizeof(Elf16_Half); // Regdir/Regind only needs opdesc so 1B
+    else if (lexer->match_regindoff(str, token1, token2))
+    {
+        Elf16_Half byteoff;
+        Elf16_Word wordoff;
+        if (parser->decode_byte(token2, byteoff)) return sizeof(Elf16_Half) + (byteoff == 0 ? 0 : sizeof(Elf16_Half));
+        else if (parser->decode_word(token2, wordoff)) return sizeof(Elf16_Half) + (wordoff == 0 ? 0 : sizeof(Elf16_Word));
+        else
+        {
+            cerr << "ERROR: Invalid offset: '" << token2 << "'!\n";
+            return false;
+        }
+        return true;
+    }
+    else if (lexer->match_regindsym(str, token1, token2) || lexer->match_memsym(str, token1))
+        return sizeof(Elf16_Half) + sizeof(Elf16_Addr);
+    else if (lexer->match_memabs(str, token1))
+    {
+        Elf16_Word address;
+        if (!parser->decode_word(token1, address))
+        {
+            cerr << "ERROR: Invalid address: '" << token1 << "'!\n";
+            return false;
+        }
+        return sizeof(Elf16_Half) + sizeof(Elf16_Addr);
+    }
+    cerr << "ERROR: Invalid operand: '" << str << "'!\n";
+    return 0;
 }
 
 bool Assembler::add_symbol(const string &symbol)
@@ -1279,9 +1331,17 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
         }
         else if (parser->decode_word(token2, wordoff))
         {
-            opdesc |= Addressing_Mode::RegIndOff16; // 16-bit offset
-            push_byte(opdesc);
-            push_word(wordoff);
+            if (wordoff == 0)
+            {
+                opdesc |= Addressing_Mode::RegInd; // zero-offset = regind without offset
+                push_byte(opdesc);
+            }
+            else
+            {
+                opdesc |= Addressing_Mode::RegIndOff16; // 16-bit offset
+                push_byte(opdesc);
+                push_word(wordoff);
+            }
         }
         else
         {
@@ -1366,7 +1426,12 @@ bool Assembler::insert_reloc(const string &symbol, Elf16_Half type, Elf16_Addr n
                 {
                     value = equ_reloc_map.at(symbol).first;
                     for (auto reloc : equ_reloc_map.at(symbol).second)
-                        reltab_map[cur_sect.name].push_back(Reltab_Entry(reloc.rel.r_info, cur_sect.loc_cnt));
+                    {
+                        Symtab_Entry &reloc_entry = symtab_map.at(strtab_vect[ELF16_R_SYM(reloc.rel.r_info)]);
+                        if (type == R_VN_PC16 && ELF16_ST_BIND(reloc_entry.sym.st_info) != STB_GLOBAL
+                            && reloc_entry.sym.st_shndx == cur_sect.shdrtab_index) continue;
+                        reltab_map[cur_sect.name].push_back(Reltab_Entry(ELF16_R_INFO(ELF16_R_SYM(reloc.rel.r_info), type), cur_sect.loc_cnt));
+                    }
                     shdrtab_map.at(relshdr).shdr.sh_size += equ_reloc_map.at(symbol).second.size() * sizeof(Elf16_Rel);
                 }
                 else
@@ -1379,7 +1444,7 @@ bool Assembler::insert_reloc(const string &symbol, Elf16_Half type, Elf16_Addr n
             }
             else if (entry.is_equ)
                 for (auto reloc : equ_reloc_map.at(symbol).second)
-                    relocs_vect->push_back(Reltab_Entry(reloc.rel.r_info, cur_sect.loc_cnt));
+                    relocs_vect->push_back(Reltab_Entry(ELF16_R_INFO(ELF16_R_SYM(reloc.rel.r_info), type), cur_sect.loc_cnt));
             else
                 relocs_vect->push_back(Reltab_Entry(ELF16_R_INFO(global ? entry.index : symtab_map.at(shstrtab_vect[entry.sym.st_shndx]).index, type), cur_sect.loc_cnt));
         }

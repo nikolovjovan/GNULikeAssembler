@@ -105,14 +105,17 @@ private:
     std::map<std::string, Shdrtab_Entry>                shdrtab_map;
     std::map<std::string, std::vector<Reltab_Entry>>    reltab_map;
     std::map<std::string, std::vector<Elf16_Half>>      section_map;
+
     std::map<std::string, std::unique_ptr<Expression>>  equ_uneval_map;
     std::map<std::string, reloc_pair_t>                 equ_reloc_map;
 
-    std::vector<Line_Info>      file_vect;
     std::vector<std::string>    strtab_vect;
     std::vector<std::string>    shstrtab_vect;
     std::vector<Elf16_Sym*>     symtab_vect;
     std::vector<Elf16_Shdr*>    shdrtab_vect;
+
+    std::vector<Line_Info>      file_vect;
+    unsigned                    file_idx;
 
     bool run_first_pass();
     bool run_second_pass();

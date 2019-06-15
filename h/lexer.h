@@ -76,8 +76,6 @@ public:
     bool match_symbol(const std::string &str, std::string &result);
     bool match_byte(const std::string &str, std::string &result);
     bool match_word(const std::string &str, std::string &result);
-    bool match_operand_1b(const std::string &str);
-    bool match_operand_2b(const std::string &str, std::string &offset);
     bool match_imm_b(const std::string &str, std::string &value);
     bool match_imm_w(const std::string &str, std::string &value);
     bool match_regdir_b(const std::string &str, std::string &reg);
@@ -112,8 +110,6 @@ private:
         symbol_str = "\\s*(" REGEX_SYM ")\\s*",
         byte_str = "\\s*(" REGEX_VAL_B ")\\s*",
         word_str = "\\s*(" REGEX_VAL_W ")\\s*",
-        operand_1b_str = "\\s*(" REGEX_ADR_REGDIR_B "|" REGEX_ADR_REGDIR_W "|\\[\\s*(?:" REGEX_ADR_REGDIR_W ")\\s*\\])\\s*",
-        operand_2b_str = "\\s*(?:(?:" REGEX_ADR_REGDIR_W ")\\s*\\[\\s*(" REGEX_VAL_B "|" REGEX_SYM ")\\s*\\]|(" REGEX_ADR_IMM_B "))\\s*",
         imm_b_str = "\\s*(" REGEX_ADR_IMM_B ")\\s*",
         imm_w_str = "\\s*(" REGEX_ADR_IMM_W ")\\s*",
         regdir_b_str = "\\s*(" REGEX_ADR_REGDIR_B ")\\s*",
