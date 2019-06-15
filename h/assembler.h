@@ -11,7 +11,7 @@
 #include <map>
 
 enum class Pass { First, Second };
-enum class Result { Success, Error, End, Uneval, Reloc };
+enum class Result { Success, Error, Empty, End, Uneval, Reloc };
 
 class Addressing_Mode
 {

@@ -151,7 +151,12 @@ bool Assembler::run_first_pass()
         if (parser->parse_line(line_str, info.line))
         {
             Result tmp = process_line(info);
-            if (tmp == Result::Success && !input.eof()) continue;
+            if (tmp == Result::Empty) continue;
+            if (tmp == Result::Success && !input.eof())
+            {
+                file_idx++;
+                continue;
+            }
             if (tmp == Result::Error)
             {
                 cerr << "ERROR: Failed to process line: " << info.line_num << "!\n";
@@ -529,12 +534,11 @@ void Assembler::write_output()
 Result Assembler::process_line(Line_Info &info)
 {
     if (info.line.label.empty() && info.line.content_type == Content_Type::None)
-        return Result::Success; // Skip empty line
+        return Result::Empty; // Skip empty line
     if (pass == Pass::First)
     {
         info.loc_cnt = cur_sect.loc_cnt;
         file_vect.push_back(info);
-        file_idx++;
     }
     if (!info.line.label.empty())
     {
