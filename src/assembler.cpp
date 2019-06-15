@@ -1371,10 +1371,7 @@ bool Assembler::insert_operand(const string &str, uint8_t size, Elf16_Addr next_
             cerr << "ERROR: Relative symbol: '" << token2 << "' cannot be used as an offset for register indirect addressing!\n";
             return false;
         }
-        push_byte(entry.sym.st_value & 0xff);
-        int16_t value = entry.sym.st_value;
-        if (value >= -128 && value <= 127) return true;
-        push_byte(entry.sym.st_value >> 8);
+        push_word(entry.sym.st_value);
         return true;
     }
     else if (lexer->match_memsym(str, token1))
